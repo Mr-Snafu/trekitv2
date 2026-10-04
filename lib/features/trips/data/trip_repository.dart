@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 
@@ -8,6 +9,7 @@ import 'package:firebase_storage/firebase_storage.dart';
 import 'package:http/http.dart' as http;
 
 import '../domain/journal_entry.dart';
+import '../domain/adventure_activity.dart';
 import '../domain/trip.dart';
 import '../domain/trip_member.dart';
 
@@ -140,6 +142,52 @@ class TripRepository {
           entries.sort((a, b) => b.timelineDate.compareTo(a.timelineDate));
           return entries;
         });
+  }
+
+  Stream<List<AdventureActivity>> watchActivityFeed(List<Trip> trips) {
+    late final StreamController<List<AdventureActivity>> controller;
+    final entriesByTrip = <String, List<JournalEntry>>{};
+    final subscriptions = <StreamSubscription<List<JournalEntry>>>[];
+
+    void emitFeed() {
+      if (!controller.isClosed) {
+        controller.add(buildAdventureActivityFeed(trips, entriesByTrip));
+      }
+    }
+
+    controller = StreamController<List<AdventureActivity>>(
+      onListen: () {
+        emitFeed();
+        for (final trip in trips) {
+          subscriptions.add(
+            _watchRecentEntries(trip.id).listen((entries) {
+              entriesByTrip[trip.id] = entries;
+              emitFeed();
+            }, onError: controller.addError),
+          );
+        }
+      },
+      onCancel: () async {
+        for (final subscription in subscriptions) {
+          await subscription.cancel();
+        }
+      },
+    );
+    return controller.stream;
+  }
+
+  Stream<List<JournalEntry>> _watchRecentEntries(String tripId) {
+    return _trips
+        .doc(tripId)
+        .collection('entries')
+        .orderBy('createdAt', descending: true)
+        .limit(25)
+        .snapshots()
+        .map(
+          (snapshot) => snapshot.docs
+              .map(JournalEntry.fromFirestore)
+              .toList(growable: false),
+        );
   }
 
   Future<void> createEntry({

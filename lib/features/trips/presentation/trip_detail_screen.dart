@@ -15,11 +15,13 @@ class TripDetailScreen extends StatefulWidget {
     required this.trip,
     required this.userId,
     required this.repository,
+    this.startWithNewEntry = false,
   });
 
   final Trip trip;
   final String userId;
   final TripRepository repository;
+  final bool startWithNewEntry;
 
   @override
   State<TripDetailScreen> createState() => _TripDetailScreenState();
@@ -32,6 +34,14 @@ class _TripDetailScreenState extends State<TripDetailScreen> {
 
   bool get _isOwner => widget.trip.ownerId == widget.userId;
   bool get _canCreateEntry => _isOwner || widget.trip.accessRole == 'editor';
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.startWithNewEntry && _canCreateEntry) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _createEntry());
+    }
+  }
 
   Future<void> _manageSharing() async {
     await showDialog<void>(

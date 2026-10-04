@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 
 import '../../auth/data/auth_service.dart';
 import '../../trips/data/trip_repository.dart';
+import '../../trips/domain/adventure_activity.dart';
 import '../../trips/domain/trip.dart';
 import '../../trips/domain/trip_organizer.dart';
 import '../../trips/presentation/trip_detail_screen.dart';
@@ -21,6 +22,8 @@ class _HomeScreenState extends State<HomeScreen> {
   late final TripRepository _repository = TripRepository();
   final _searchController = TextEditingController();
   final Set<String> _busyTripIds = <String>{};
+  List<Trip> _latestTrips = const [];
+  int _selectedIndex = 0;
   TripOwnershipFilter _ownershipFilter = TripOwnershipFilter.all;
   TripSortOrder _sortOrder = TripSortOrder.recentlyUpdated;
   bool _isSigningOut = false;
@@ -211,18 +214,126 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  Future<void> _openTrip(Trip trip) async {
+  Future<void> _openTrip(Trip trip, {bool startWithNewEntry = false}) async {
     await Navigator.of(context).push(
       MaterialPageRoute<void>(
         builder: (_) => TripDetailScreen(
           trip: trip,
           userId: widget.user.uid,
           repository: _repository,
+          startWithNewEntry: startWithNewEntry,
         ),
       ),
     );
     if (mounted) {
       setState(() {});
+    }
+  }
+
+  Future<void> _showCreateMenu() async {
+    final action = await showModalBottomSheet<_CreateAction>(
+      context: context,
+      showDragHandle: true,
+      builder: (context) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text('Create', style: Theme.of(context).textTheme.headlineSmall),
+              const SizedBox(height: 12),
+              ListTile(
+                leading: const CircleAvatar(
+                  child: Icon(Icons.landscape_outlined),
+                ),
+                title: const Text('New adventure'),
+                subtitle: const Text('Plan a trip and invite trusted people.'),
+                onTap: () => Navigator.of(context).pop(_CreateAction.adventure),
+              ),
+              ListTile(
+                enabled: _latestTrips.any(
+                  (trip) =>
+                      trip.accessRole == 'owner' || trip.accessRole == 'editor',
+                ),
+                leading: const CircleAvatar(
+                  child: Icon(Icons.edit_note_outlined),
+                ),
+                title: const Text('New journal entry'),
+                subtitle: Text(
+                  _latestTrips.isEmpty
+                      ? 'Create an adventure first.'
+                      : 'Add a memory to one of your adventures.',
+                ),
+                onTap: () => Navigator.of(context).pop(_CreateAction.entry),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+    if (!mounted || action == null) {
+      return;
+    }
+    switch (action) {
+      case _CreateAction.adventure:
+        await _createTrip();
+      case _CreateAction.entry:
+        await _chooseAdventureForEntry();
+    }
+  }
+
+  Future<void> _chooseAdventureForEntry() async {
+    final editableTrips = _latestTrips
+        .where(
+          (trip) => trip.accessRole == 'owner' || trip.accessRole == 'editor',
+        )
+        .toList(growable: false);
+    if (editableTrips.isEmpty) {
+      _showMessage('Create an adventure before adding a journal entry.');
+      return;
+    }
+
+    final trip = await showModalBottomSheet<Trip>(
+      context: context,
+      showDragHandle: true,
+      builder: (context) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text(
+                'Choose an adventure',
+                style: Theme.of(context).textTheme.headlineSmall,
+              ),
+              const SizedBox(height: 12),
+              Flexible(
+                child: ListView.builder(
+                  shrinkWrap: true,
+                  itemCount: editableTrips.length,
+                  itemBuilder: (context, index) {
+                    final candidate = editableTrips[index];
+                    return ListTile(
+                      leading: const Icon(Icons.hiking),
+                      title: Text(candidate.name),
+                      subtitle: candidate.location.isEmpty
+                          ? null
+                          : Text(candidate.location),
+                      trailing: const Icon(Icons.chevron_right),
+                      onTap: () => Navigator.of(context).pop(candidate),
+                    );
+                  },
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+    if (trip != null && mounted) {
+      await _openTrip(trip, startWithNewEntry: true);
     }
   }
 
@@ -307,8 +418,7 @@ class _HomeScreenState extends State<HomeScreen> {
         .showSnackBar(SnackBar(content: Text(message)));
   }
 
-  @override
-  Widget build(BuildContext context) {
+  Widget _buildAdventuresPage(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Your adventures'),
@@ -614,6 +724,514 @@ class _HomeScreenState extends State<HomeScreen> {
                 },
               ),
             ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: StreamBuilder<List<Trip>>(
+        stream: _repository.watchAccessibleTrips(widget.user.uid),
+        builder: (context, snapshot) {
+          final trips = snapshot.data ?? _latestTrips;
+          _latestTrips = trips;
+
+          return switch (_selectedIndex) {
+            0 => _FeedPage(
+              repository: _repository,
+              trips: trips,
+              isLoading:
+                  snapshot.connectionState == ConnectionState.waiting &&
+                  trips.isEmpty,
+              error: snapshot.error,
+              onOpenTrip: _openTrip,
+              onCreate: _showCreateMenu,
+            ),
+            1 => _buildAdventuresPage(context),
+            3 => _CirclePage(
+              onOpenAdventures: () => setState(() => _selectedIndex = 1),
+            ),
+            4 => _ProfilePage(
+              user: widget.user,
+              isSigningOut: _isSigningOut,
+              isDeletingAccount: _isDeletingAccount,
+              onOpenSettings: _openAccountSettings,
+              onSignOut: _signOut,
+              onSendVerification: _sendVerification,
+              onRefreshVerification: _refreshVerification,
+              isSendingVerification: _isSendingVerification,
+              isRefreshingVerification: _isRefreshingVerification,
+            ),
+            _ => const SizedBox.shrink(),
+          };
+        },
+      ),
+      bottomNavigationBar: TrekItNavigationBar(
+        selectedIndex: _selectedIndex,
+        onSelected: (index) {
+          if (index == 2) {
+            _showCreateMenu();
+            return;
+          }
+          setState(() => _selectedIndex = index);
+        },
+      ),
+    );
+  }
+}
+
+class TrekItNavigationBar extends StatelessWidget {
+  const TrekItNavigationBar({
+    super.key,
+    required this.selectedIndex,
+    required this.onSelected,
+  });
+
+  final int selectedIndex;
+  final ValueChanged<int> onSelected;
+
+  @override
+  Widget build(BuildContext context) {
+    return NavigationBar(
+      selectedIndex: selectedIndex,
+      onDestinationSelected: onSelected,
+      destinations: [
+        const NavigationDestination(
+          icon: Icon(Icons.dynamic_feed_outlined),
+          selectedIcon: Icon(Icons.dynamic_feed),
+          label: 'Feed',
+        ),
+        const NavigationDestination(
+          icon: Icon(Icons.landscape_outlined),
+          selectedIcon: Icon(Icons.landscape),
+          label: 'Adventures',
+        ),
+        NavigationDestination(
+          icon: Icon(
+            Icons.add_circle,
+            color: Theme.of(context).colorScheme.secondary,
+            size: 30,
+          ),
+          label: 'Create',
+        ),
+        const NavigationDestination(
+          icon: Icon(Icons.group_outlined),
+          selectedIcon: Icon(Icons.group),
+          label: 'Circle',
+        ),
+        const NavigationDestination(
+          icon: Icon(Icons.person_outline),
+          selectedIcon: Icon(Icons.person),
+          label: 'Profile',
+        ),
+      ],
+    );
+  }
+}
+
+enum _CreateAction { adventure, entry }
+
+class _FeedPage extends StatelessWidget {
+  const _FeedPage({
+    required this.repository,
+    required this.trips,
+    required this.isLoading,
+    required this.error,
+    required this.onOpenTrip,
+    required this.onCreate,
+  });
+
+  final TripRepository repository;
+  final List<Trip> trips;
+  final bool isLoading;
+  final Object? error;
+  final ValueChanged<Trip> onOpenTrip;
+  final VoidCallback onCreate;
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: Row(
+          children: [
+            ClipRRect(
+              borderRadius: BorderRadius.circular(10),
+              child: Image.asset('trekit-t.png', width: 38, height: 38),
+            ),
+            const SizedBox(width: 10),
+            const Text('TrekIt'),
+          ],
+        ),
+      ),
+      body: SafeArea(
+        child: isLoading
+            ? const Center(child: CircularProgressIndicator())
+            : error != null && trips.isEmpty
+            ? _MessageState(
+                icon: Icons.cloud_off_outlined,
+                title: 'Feed is unavailable',
+                message: 'Check your connection and try again.',
+              )
+            : ListView(
+                padding: const EdgeInsets.fromLTRB(20, 20, 20, 32),
+                children: [
+                  Text(
+                    'Feed',
+                    style: Theme.of(context).textTheme.headlineMedium
+                        ?.copyWith(fontWeight: FontWeight.w800),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    'Private activity from adventures you are authorized to view.',
+                    style: Theme.of(context).textTheme.bodyLarge,
+                  ),
+                  const SizedBox(height: 20),
+                  if (trips.isEmpty)
+                    _FeedEmptyState(onCreate: onCreate)
+                  else
+                    StreamBuilder<List<AdventureActivity>>(
+                      stream: repository.watchActivityFeed(trips),
+                      builder: (context, snapshot) {
+                        if (snapshot.hasError) {
+                          return const _InlineMessage(
+                            icon: Icons.cloud_off_outlined,
+                            title: 'Activity is unavailable',
+                            message: 'Check your connection and try again.',
+                          );
+                        }
+                        if (!snapshot.hasData) {
+                          return const Padding(
+                            padding: EdgeInsets.all(32),
+                            child: Center(child: CircularProgressIndicator()),
+                          );
+                        }
+                        final activity = snapshot.data!;
+                        if (activity.isEmpty) {
+                          return _FeedEmptyState(onCreate: onCreate);
+                        }
+                        return Column(
+                          children: [
+                            for (final item in activity.take(100)) ...[
+                              _ActivityCard(
+                                activity: item,
+                                onTap: () => onOpenTrip(item.trip),
+                              ),
+                              const SizedBox(height: 12),
+                            ],
+                          ],
+                        );
+                      },
+                    ),
+                ],
+              ),
+      ),
+    );
+  }
+}
+
+class _ActivityCard extends StatelessWidget {
+  const _ActivityCard({required this.activity, required this.onTap});
+
+  final AdventureActivity activity;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final entry = activity.entry;
+    final isEntry = activity.type == AdventureActivityType.journalEntry;
+    final localizations = MaterialLocalizations.of(context);
+    return Card(
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.all(18),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              CircleAvatar(
+                child: Icon(
+                  isEntry ? Icons.auto_stories_outlined : Icons.flag_outlined,
+                ),
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      isEntry ? entry!.title : 'Adventure started',
+                      style: Theme.of(context).textTheme.titleMedium
+                          ?.copyWith(fontWeight: FontWeight.w700),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      isEntry
+                          ? 'A memory was added to ${activity.trip.name}.'
+                          : '${activity.trip.name} was created.',
+                    ),
+                    if (entry != null && entry.body.isNotEmpty) ...[
+                      const SizedBox(height: 8),
+                      Text(
+                        entry.body,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                    ],
+                    const SizedBox(height: 10),
+                    Row(
+                      children: [
+                        Text(
+                          localizations.formatMediumDate(activity.occurredAt),
+                          style: Theme.of(context).textTheme.bodySmall,
+                        ),
+                        if (entry?.imagePath != null) ...[
+                          const SizedBox(width: 10),
+                          const Icon(Icons.photo_outlined, size: 16),
+                          const SizedBox(width: 4),
+                          Text(
+                            'Photo',
+                            style: Theme.of(context).textTheme.bodySmall,
+                          ),
+                        ],
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+              const Icon(Icons.chevron_right),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _FeedEmptyState extends StatelessWidget {
+  const _FeedEmptyState({required this.onCreate});
+
+  final VoidCallback onCreate;
+
+  @override
+  Widget build(BuildContext context) {
+    return _InlineMessage(
+      icon: Icons.dynamic_feed_outlined,
+      title: 'Your private feed starts here',
+      message: 'Create an adventure or add a journal entry to begin your activity timeline.',
+      actionLabel: 'Create',
+      onAction: onCreate,
+    );
+  }
+}
+
+class _CirclePage extends StatelessWidget {
+  const _CirclePage({required this.onOpenAdventures});
+
+  final VoidCallback onOpenAdventures;
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('Circle')),
+      body: SafeArea(
+        child: ListView(
+          padding: const EdgeInsets.all(20),
+          children: [
+            Text(
+              'Your trusted people',
+              style: Theme.of(context).textTheme.headlineSmall,
+            ),
+            const SizedBox(height: 10),
+            const Text(
+              'Circle invitations and TrekIt IDs are the next collaboration layer. For now, you can securely share access from each adventure.',
+            ),
+            const SizedBox(height: 20),
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.all(20),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    const Icon(Icons.group_outlined, size: 54),
+                    const SizedBox(height: 16),
+                    const Text(
+                      'Share an adventure',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(fontWeight: FontWeight.w700),
+                    ),
+                    const SizedBox(height: 8),
+                    const Text(
+                      'Open one of your adventures and use its sharing controls to invite an existing TrekIt account.',
+                      textAlign: TextAlign.center,
+                    ),
+                    const SizedBox(height: 16),
+                    FilledButton(
+                      onPressed: onOpenAdventures,
+                      child: const Text('Open Adventures'),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _ProfilePage extends StatelessWidget {
+  const _ProfilePage({
+    required this.user,
+    required this.isSigningOut,
+    required this.isDeletingAccount,
+    required this.onOpenSettings,
+    required this.onSignOut,
+    required this.onSendVerification,
+    required this.onRefreshVerification,
+    required this.isSendingVerification,
+    required this.isRefreshingVerification,
+  });
+
+  final User user;
+  final bool isSigningOut;
+  final bool isDeletingAccount;
+  final VoidCallback onOpenSettings;
+  final VoidCallback onSignOut;
+  final VoidCallback onSendVerification;
+  final VoidCallback onRefreshVerification;
+  final bool isSendingVerification;
+  final bool isRefreshingVerification;
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('Profile')),
+      body: SafeArea(
+        child: ListView(
+          padding: const EdgeInsets.all(20),
+          children: [
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.all(20),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    const CircleAvatar(
+                      radius: 36,
+                      child: Icon(Icons.person_outline, size: 38),
+                    ),
+                    const SizedBox(height: 16),
+                    Text(
+                      user.displayName?.trim().isNotEmpty == true
+                          ? user.displayName!.trim()
+                          : 'TrekIt Explorer',
+                      textAlign: TextAlign.center,
+                      style: Theme.of(context).textTheme.headlineSmall,
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      user.email ?? 'TrekIt account',
+                      textAlign: TextAlign.center,
+                    ),
+                    const SizedBox(height: 8),
+                    Chip(
+                      avatar: Icon(
+                        user.emailVerified
+                            ? Icons.verified_outlined
+                            : Icons.mark_email_unread_outlined,
+                      ),
+                      label: Text(
+                        user.emailVerified
+                            ? 'Email verified'
+                            : 'Email not verified',
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            if (!user.emailVerified) ...[
+              const SizedBox(height: 12),
+              OutlinedButton.icon(
+                onPressed: isSendingVerification ? null : onSendVerification,
+                icon: const Icon(Icons.outgoing_mail),
+                label: Text(
+                  isSendingVerification
+                      ? 'Sending…'
+                      : 'Send verification email',
+                ),
+              ),
+              const SizedBox(height: 8),
+              OutlinedButton.icon(
+                onPressed: isRefreshingVerification
+                    ? null
+                    : onRefreshVerification,
+                icon: const Icon(Icons.refresh),
+                label: Text(
+                  isRefreshingVerification ? 'Checking…' : 'Check verification',
+                ),
+              ),
+            ],
+            const SizedBox(height: 12),
+            FilledButton.icon(
+              onPressed: isDeletingAccount ? null : onOpenSettings,
+              icon: const Icon(Icons.settings_outlined),
+              label: const Text('Account settings'),
+            ),
+            const SizedBox(height: 12),
+            OutlinedButton.icon(
+              onPressed: isSigningOut ? null : onSignOut,
+              icon: const Icon(Icons.logout),
+              label: Text(isSigningOut ? 'Signing out…' : 'Sign out'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _InlineMessage extends StatelessWidget {
+  const _InlineMessage({
+    required this.icon,
+    required this.title,
+    required this.message,
+    this.actionLabel,
+    this.onAction,
+  });
+
+  final IconData icon;
+  final String title;
+  final String message;
+  final String? actionLabel;
+  final VoidCallback? onAction;
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          children: [
+            Icon(icon, size: 52),
+            const SizedBox(height: 14),
+            Text(
+              title,
+              textAlign: TextAlign.center,
+              style: Theme.of(context).textTheme.titleLarge,
+            ),
+            const SizedBox(height: 8),
+            Text(message, textAlign: TextAlign.center),
+            if (actionLabel != null && onAction != null) ...[
+              const SizedBox(height: 16),
+              FilledButton(onPressed: onAction, child: Text(actionLabel!)),
+            ],
           ],
         ),
       ),
