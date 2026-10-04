@@ -28,7 +28,7 @@ This document is the source of truth for TrekIt V2 development. TrekIt is a priv
 - Show only activity from authorized adventures.
 - Support adventure, journal-entry, photo, sharing, and comment activity. *(Live)*
 - Quick Snippets and a clear locally saved pending/retry state are live.
-- Use friendly dates and useful summaries rather than raw timestamps.
+- Use friendly dates, grouped time periods, and useful event summaries rather than raw timestamps. *(Live)*
 
 ### Adventures
 
@@ -66,5 +66,6 @@ This document is the source of truth for TrekIt V2 development. TrekIt is a priv
 5. Expand Profile, notifications, privacy controls, and data export. (Live)
 6. Add comments and richer feed events. *(Live)*
 7. Expand the central Create hub with destination-aware photo and Quick Snippet flows. *(Live)*
+8. Polish Feed readability with friendly time labels, day grouping, and richer event context. *(Live)*
 
 Every phase should be checked against this blueprint, tested at mobile width, deployed through a preview, verified against the live build, and backed up to GitHub.

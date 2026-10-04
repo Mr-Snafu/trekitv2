@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
 
+import '../../../core/time/friendly_time.dart';
 import '../../auth/data/auth_service.dart';
 import '../../circle/data/circle_repository.dart';
 import '../../circle/domain/circle_state.dart';
@@ -1355,12 +1356,48 @@ class _FeedPageState extends State<_FeedPage> {
                         if (activity.isEmpty) {
                           return _FeedEmptyState(onCreate: widget.onCreate);
                         }
+                        final visibleActivity = activity.take(100).toList();
+                        final now = DateTime.now();
                         return Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
                           children: [
-                            for (final item in activity.take(100)) ...[
+                            for (
+                              var index = 0;
+                              index < visibleActivity.length;
+                              index++
+                            ) ...[
+                              if (index == 0 ||
+                                  activitySectionLabel(
+                                        visibleActivity[index].occurredAt,
+                                        now,
+                                      ) !=
+                                      activitySectionLabel(
+                                        visibleActivity[index - 1].occurredAt,
+                                        now,
+                                      )) ...[
+                                Padding(
+                                  padding: EdgeInsets.only(
+                                    top: index == 0 ? 0 : 10,
+                                    bottom: 8,
+                                  ),
+                                  child: Text(
+                                    activitySectionLabel(
+                                      visibleActivity[index].occurredAt,
+                                      now,
+                                    ),
+                                    style: Theme.of(context)
+                                        .textTheme
+                                        .titleSmall
+                                        ?.copyWith(fontWeight: FontWeight.w800),
+                                  ),
+                                ),
+                              ],
                               _ActivityCard(
-                                activity: item,
-                                onTap: () => widget.onOpenTrip(item.trip),
+                                activity: visibleActivity[index],
+                                now: now,
+                                onTap: () => widget.onOpenTrip(
+                                  visibleActivity[index].trip,
+                                ),
                               ),
                               const SizedBox(height: 12),
                             ],
@@ -1534,52 +1571,81 @@ class _FeedPageState extends State<_FeedPage> {
 }
 
 class _ActivityCard extends StatelessWidget {
-  const _ActivityCard({required this.activity, required this.onTap});
+  const _ActivityCard({
+    required this.activity,
+    required this.now,
+    required this.onTap,
+  });
 
   final AdventureActivity activity;
+  final DateTime now;
   final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
     final entry = activity.entry;
     final snippet = activity.snippet;
-    final (icon, title, message) = switch (activity.type) {
+    final (icon, title, message, contextLabel) = switch (activity.type) {
       AdventureActivityType.journalEntry => (
         Icons.auto_stories_outlined,
         entry!.title,
-        'A memory was added to ${activity.trip.name}.',
+        entry.body,
+        activity.trip.name,
       ),
       AdventureActivityType.photoAdded => (
         Icons.photo_outlined,
         'Photo added',
-        'A photo was added to ${activity.trip.name}.',
+        entry!.title,
+        activity.trip.name,
       ),
       AdventureActivityType.quickSnippet => (
         Icons.bolt_outlined,
         'Quick snippet',
         snippet!.text,
+        activity.trip.name,
       ),
       AdventureActivityType.commentAdded => (
         Icons.mode_comment_outlined,
         'New comment',
         activity.comment!.body,
+        activity.trip.name,
       ),
       AdventureActivityType.memberJoined => (
         Icons.person_add_outlined,
         'Adventure shared',
-        'A trusted person was added to ${activity.trip.name}.',
+        'A trusted person was added.',
+        activity.trip.name,
       ),
       AdventureActivityType.adventureStarted => (
         Icons.flag_outlined,
         'Adventure started',
-        '${activity.trip.name} was created.',
+        activity.trip.description.isEmpty
+            ? '${activity.trip.name} was created.'
+            : activity.trip.description,
+        activity.trip.name,
       ),
     };
-    final showEntryBody =
-        activity.type == AdventureActivityType.journalEntry &&
-        entry != null &&
-        entry.body.isNotEmpty;
     final localizations = MaterialLocalizations.of(context);
+    const weekdays = <String>[
+      'Monday',
+      'Tuesday',
+      'Wednesday',
+      'Thursday',
+      'Friday',
+      'Saturday',
+      'Sunday',
+    ];
+    final timeLabel = friendlyTimeLabel(
+      occurredAt: activity.occurredAt,
+      now: now,
+      formatTime: (value) =>
+          localizations.formatTimeOfDay(TimeOfDay.fromDateTime(value)),
+      formatDate: localizations.formatMediumDate,
+      formatWeekday: (value) => weekdays[value.weekday - 1],
+    );
+    final exactTime =
+        '${localizations.formatFullDate(activity.occurredAt.toLocal())}, '
+        '${localizations.formatTimeOfDay(TimeOfDay.fromDateTime(activity.occurredAt.toLocal()))}';
     return Card(
       clipBehavior: Clip.antiAlias,
       child: InkWell(
@@ -1602,15 +1668,6 @@ class _ActivityCard extends StatelessWidget {
                     ),
                     const SizedBox(height: 4),
                     Text(message, maxLines: 3, overflow: TextOverflow.ellipsis),
-                    if (showEntryBody) ...[
-                      const SizedBox(height: 8),
-                      Text(
-                        entry.body,
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                        style: Theme.of(context).textTheme.bodySmall,
-                      ),
-                    ],
                     if (snippet != null && snippet.location.isNotEmpty) ...[
                       const SizedBox(height: 8),
                       Row(
@@ -1622,13 +1679,22 @@ class _ActivityCard extends StatelessWidget {
                       ),
                     ],
                     const SizedBox(height: 10),
-                    Row(
-                      children: [
-                        Text(
-                          localizations.formatMediumDate(activity.occurredAt),
-                          style: Theme.of(context).textTheme.bodySmall,
-                        ),
-                      ],
+                    Text(
+                      contextLabel,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                        color: Theme.of(context).colorScheme.primary,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Tooltip(
+                      message: exactTime,
+                      child: Text(
+                        timeLabel,
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
                     ),
                   ],
                 ),
