@@ -15,7 +15,7 @@ This document is the source of truth for TrekIt V2 development. TrekIt is a priv
 
 | Area | Purpose | Current status |
 | --- | --- | --- |
-| Feed | Private, newest-first activity from accessible adventures | Live with adventure, journal-entry, and Quick Snippet activity plus a local retry queue |
+| Feed | Private, newest-first activity from accessible adventures | Live with adventure, journal-entry, photo, comment, sharing, and Quick Snippet activity plus a local retry queue |
 | Adventures | Organize owned and shared trips and open their journals | Live with lifecycle groups, cover images, search, filters, sorting, editing, deletion, sharing, entries, and photos |
 | Create | Start an adventure or add a journal entry from anywhere | Initial creation menu is live |
 | Circle | Manage trusted connections, requests, blocking, and TrekIt IDs | Live with private IDs, requests, cooldowns, remove, block, and unblock controls |
@@ -26,7 +26,7 @@ This document is the source of truth for TrekIt V2 development. TrekIt is a priv
 ### Feed
 
 - Show only activity from authorized adventures.
-- Support adventure, journal-entry, photo, sharing, and future comment activity.
+- Support adventure, journal-entry, photo, sharing, and comment activity. *(Live)*
 - Quick Snippets and a clear locally saved pending/retry state are live.
 - Use friendly dates and useful summaries rather than raw timestamps.
 
@@ -64,6 +64,6 @@ This document is the source of truth for TrekIt V2 development. TrekIt is a priv
 3. Add Quick Snippets and offline delivery states. (Live)
 4. Build the Circle relationship and invitation model. (Live)
 5. Expand Profile, notifications, privacy controls, and data export. (Live)
-6. Add comments and richer feed events.
+6. Add comments and richer feed events. *(Live)*
 
 Every phase should be checked against this blueprint, tested at mobile width, deployed through a preview, verified against the live build, and backed up to GitHub.

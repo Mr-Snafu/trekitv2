@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 
 import '../data/trip_repository.dart';
+import '../domain/adventure_comment.dart';
 import '../domain/journal_entry.dart';
 import '../domain/trip.dart';
 import '../domain/trip_member.dart';
@@ -371,6 +372,15 @@ class _TripDetailScreenState extends State<TripDetailScreen> {
                                   ),
                                 ],
                               ),
+                              const SizedBox(height: 18),
+                              const Divider(),
+                              _EntryComments(
+                                repository: widget.repository,
+                                tripId: widget.trip.id,
+                                entryId: entry.id,
+                                currentUserId: widget.userId,
+                                isTripOwner: _isOwner,
+                              ),
                             ],
                           ),
                         ),
@@ -388,6 +398,334 @@ class _TripDetailScreenState extends State<TripDetailScreen> {
 }
 
 enum _EntryAction { edit, delete }
+
+enum _CommentAction { edit, delete }
+
+class _EntryComments extends StatefulWidget {
+  const _EntryComments({
+    required this.repository,
+    required this.tripId,
+    required this.entryId,
+    required this.currentUserId,
+    required this.isTripOwner,
+  });
+
+  final TripRepository repository;
+  final String tripId;
+  final String entryId;
+  final String currentUserId;
+  final bool isTripOwner;
+
+  @override
+  State<_EntryComments> createState() => _EntryCommentsState();
+}
+
+class _EntryCommentsState extends State<_EntryComments> {
+  final _controller = TextEditingController();
+  final Set<String> _busyCommentIds = <String>{};
+  bool _isSending = false;
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  void _showMessage(String message) {
+    ScaffoldMessenger.of(context)
+        .showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  Future<void> _sendComment() async {
+    final body = _controller.text.trim();
+    if (body.isEmpty || body.length > 2000 || _isSending) return;
+    setState(() => _isSending = true);
+    try {
+      await widget.repository.createComment(
+        tripId: widget.tripId,
+        entryId: widget.entryId,
+        authorId: widget.currentUserId,
+        body: body,
+      );
+      _controller.clear();
+    } catch (error, stackTrace) {
+      debugPrint('Comment save failed: $error\n$stackTrace');
+      if (mounted) {
+        _showMessage('The comment could not be saved. Please try again.');
+      }
+    } finally {
+      if (mounted) setState(() => _isSending = false);
+    }
+  }
+
+  Future<void> _editComment(AdventureComment comment) async {
+    final updatedBody = await showDialog<String>(
+      context: context,
+      builder: (_) => _CommentDialog(initialBody: comment.body),
+    );
+    if (updatedBody == null || !mounted) return;
+    setState(() => _busyCommentIds.add(comment.id));
+    try {
+      await widget.repository.updateComment(
+        tripId: widget.tripId,
+        commentId: comment.id,
+        body: updatedBody,
+      );
+    } catch (error, stackTrace) {
+      debugPrint('Comment update failed: $error\n$stackTrace');
+      if (mounted) _showMessage('The comment could not be updated.');
+    } finally {
+      if (mounted) setState(() => _busyCommentIds.remove(comment.id));
+    }
+  }
+
+  Future<void> _deleteComment(AdventureComment comment) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Delete this comment?'),
+        content: const Text('This cannot be undone.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    setState(() => _busyCommentIds.add(comment.id));
+    try {
+      await widget.repository.deleteComment(
+        tripId: widget.tripId,
+        commentId: comment.id,
+      );
+    } catch (error, stackTrace) {
+      debugPrint('Comment delete failed: $error\n$stackTrace');
+      if (mounted) _showMessage('The comment could not be deleted.');
+    } finally {
+      if (mounted) setState(() => _busyCommentIds.remove(comment.id));
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return StreamBuilder<List<AdventureComment>>(
+      stream: widget.repository.watchComments(
+        tripId: widget.tripId,
+        entryId: widget.entryId,
+      ),
+      builder: (context, snapshot) {
+        final comments = snapshot.data ?? const <AdventureComment>[];
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              comments.isEmpty
+                  ? 'Discussion'
+                  : 'Discussion (${comments.length})',
+              style: Theme.of(context).textTheme.titleSmall
+                  ?.copyWith(fontWeight: FontWeight.w700),
+            ),
+            if (snapshot.hasError) ...[
+              const SizedBox(height: 8),
+              Text(
+                'Comments are unavailable right now.',
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+            ],
+            for (final comment in comments) ...[
+              const SizedBox(height: 12),
+              _CommentTile(
+                comment: comment,
+                isCurrentUser: comment.authorId == widget.currentUserId,
+                canDelete:
+                    widget.isTripOwner ||
+                    comment.authorId == widget.currentUserId,
+                isBusy: _busyCommentIds.contains(comment.id),
+                onEdit: () => _editComment(comment),
+                onDelete: () => _deleteComment(comment),
+              ),
+            ],
+            const SizedBox(height: 14),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: _controller,
+                    enabled: !_isSending,
+                    minLines: 1,
+                    maxLines: 4,
+                    maxLength: 2000,
+                    decoration: const InputDecoration(
+                      hintText: 'Add a private comment',
+                      counterText: '',
+                    ),
+                    textInputAction: TextInputAction.newline,
+                  ),
+                ),
+                const SizedBox(width: 8),
+                IconButton.filled(
+                  tooltip: 'Post comment',
+                  onPressed: _isSending ? null : _sendComment,
+                  icon: _isSending
+                      ? const SizedBox.square(
+                          dimension: 18,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.send_outlined),
+                ),
+              ],
+            ),
+          ],
+        );
+      },
+    );
+  }
+}
+
+class _CommentTile extends StatelessWidget {
+  const _CommentTile({
+    required this.comment,
+    required this.isCurrentUser,
+    required this.canDelete,
+    required this.isBusy,
+    required this.onEdit,
+    required this.onDelete,
+  });
+
+  final AdventureComment comment;
+  final bool isCurrentUser;
+  final bool canDelete;
+  final bool isBusy;
+  final VoidCallback onEdit;
+  final VoidCallback onDelete;
+
+  @override
+  Widget build(BuildContext context) {
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: Theme.of(context).colorScheme.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(14),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(14, 10, 8, 10),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    isCurrentUser ? 'You' : 'Adventure member',
+                    style: Theme.of(context).textTheme.labelMedium
+                        ?.copyWith(fontWeight: FontWeight.w700),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(comment.body),
+                  const SizedBox(height: 5),
+                  Text(
+                    MaterialLocalizations.of(context)
+                        .formatMediumDate(comment.createdAt),
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                ],
+              ),
+            ),
+            if (isBusy)
+              const Padding(
+                padding: EdgeInsets.all(12),
+                child: SizedBox.square(
+                  dimension: 16,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                ),
+              )
+            else if (isCurrentUser || canDelete)
+              PopupMenuButton<_CommentAction>(
+                tooltip: 'Comment options',
+                onSelected: (action) {
+                  switch (action) {
+                    case _CommentAction.edit:
+                      onEdit();
+                    case _CommentAction.delete:
+                      onDelete();
+                  }
+                },
+                itemBuilder: (_) => [
+                  if (isCurrentUser)
+                    const PopupMenuItem(
+                      value: _CommentAction.edit,
+                      child: Text('Edit'),
+                    ),
+                  if (canDelete)
+                    const PopupMenuItem(
+                      value: _CommentAction.delete,
+                      child: Text('Delete'),
+                    ),
+                ],
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _CommentDialog extends StatefulWidget {
+  const _CommentDialog({required this.initialBody});
+
+  final String initialBody;
+
+  @override
+  State<_CommentDialog> createState() => _CommentDialogState();
+}
+
+class _CommentDialogState extends State<_CommentDialog> {
+  late final TextEditingController _controller = TextEditingController(
+    text: widget.initialBody,
+  );
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  void _save() {
+    final body = _controller.text.trim();
+    if (body.isNotEmpty && body.length <= 2000) {
+      Navigator.of(context).pop(body);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Edit comment'),
+      content: TextField(
+        controller: _controller,
+        autofocus: true,
+        minLines: 3,
+        maxLines: 6,
+        maxLength: 2000,
+        decoration: const InputDecoration(labelText: 'Comment'),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(onPressed: _save, child: const Text('Save')),
+      ],
+    );
+  }
+}
 
 class _TripOverview extends StatelessWidget {
   const _TripOverview({required this.trip});

@@ -10,6 +10,8 @@ import 'package:http/http.dart' as http;
 
 import '../domain/journal_entry.dart';
 import '../domain/adventure_activity.dart';
+import '../domain/adventure_comment.dart';
+import '../domain/adventure_member_event.dart';
 import '../domain/quick_snippet.dart';
 import '../domain/trip.dart';
 import '../domain/trip_member.dart';
@@ -192,12 +194,20 @@ class TripRepository {
     late final StreamController<List<AdventureActivity>> controller;
     final entriesByTrip = <String, List<JournalEntry>>{};
     final snippetsByTrip = <String, List<QuickSnippet>>{};
+    final commentsByTrip = <String, List<AdventureComment>>{};
+    final membersByTrip = <String, List<AdventureMemberEvent>>{};
     final subscriptions = <StreamSubscription<dynamic>>[];
 
     void emitFeed() {
       if (!controller.isClosed) {
         controller.add(
-          buildAdventureActivityFeed(trips, entriesByTrip, snippetsByTrip),
+          buildAdventureActivityFeed(
+            trips,
+            entriesByTrip,
+            snippetsByTrip,
+            commentsByTrip,
+            membersByTrip,
+          ),
         );
       }
     }
@@ -209,6 +219,18 @@ class TripRepository {
           subscriptions.add(
             _watchRecentEntries(trip.id).listen((entries) {
               entriesByTrip[trip.id] = entries;
+              emitFeed();
+            }, onError: controller.addError),
+          );
+          subscriptions.add(
+            _watchRecentComments(trip.id).listen((comments) {
+              commentsByTrip[trip.id] = comments;
+              emitFeed();
+            }, onError: controller.addError),
+          );
+          subscriptions.add(
+            _watchRecentMembers(trip.id).listen((members) {
+              membersByTrip[trip.id] = members;
               emitFeed();
             }, onError: controller.addError),
           );
@@ -227,6 +249,95 @@ class TripRepository {
       },
     );
     return controller.stream;
+  }
+
+  Stream<List<AdventureComment>> _watchRecentComments(String tripId) {
+    return _trips
+        .doc(tripId)
+        .collection('comments')
+        .orderBy('createdAt', descending: true)
+        .limit(25)
+        .snapshots()
+        .map(
+          (snapshot) => snapshot.docs
+              .map(AdventureComment.fromFirestore)
+              .toList(growable: false),
+        );
+  }
+
+  Stream<List<AdventureMemberEvent>> _watchRecentMembers(String tripId) {
+    return _trips
+        .doc(tripId)
+        .collection('members')
+        .orderBy('createdAt', descending: true)
+        .limit(25)
+        .snapshots()
+        .map(
+          (snapshot) => snapshot.docs
+              .map(AdventureMemberEvent.fromFirestore)
+              .toList(growable: false),
+        );
+  }
+
+  Stream<List<AdventureComment>> watchComments({
+    required String tripId,
+    required String entryId,
+  }) {
+    return _trips
+        .doc(tripId)
+        .collection('comments')
+        .where('entryId', isEqualTo: entryId)
+        .limit(100)
+        .snapshots()
+        .map((snapshot) {
+          final comments = snapshot.docs
+              .map(AdventureComment.fromFirestore)
+              .toList(growable: false);
+          comments.sort((a, b) => a.createdAt.compareTo(b.createdAt));
+          return comments;
+        });
+  }
+
+  Future<void> createComment({
+    required String tripId,
+    required String entryId,
+    required String authorId,
+    required String body,
+  }) async {
+    final trimmedBody = body.trim();
+    if (trimmedBody.isEmpty || trimmedBody.length > 2000) {
+      throw ArgumentError('A comment must be between 1 and 2,000 characters.');
+    }
+    final now = Timestamp.now();
+    await _trips.doc(tripId).collection('comments').add({
+      'entryId': entryId,
+      'body': trimmedBody,
+      'authorId': authorId,
+      'createdAt': now,
+      'updatedAt': now,
+    });
+  }
+
+  Future<void> updateComment({
+    required String tripId,
+    required String commentId,
+    required String body,
+  }) {
+    final trimmedBody = body.trim();
+    if (trimmedBody.isEmpty || trimmedBody.length > 2000) {
+      throw ArgumentError('A comment must be between 1 and 2,000 characters.');
+    }
+    return _trips.doc(tripId).collection('comments').doc(commentId).update({
+      'body': trimmedBody,
+      'updatedAt': Timestamp.now(),
+    });
+  }
+
+  Future<void> deleteComment({
+    required String tripId,
+    required String commentId,
+  }) {
+    return _trips.doc(tripId).collection('comments').doc(commentId).delete();
   }
 
   Stream<List<QuickSnippet>> _watchRecentSnippets(String tripId) {
@@ -546,17 +657,10 @@ class TripRepository {
     required String tripId,
     required JournalEntry entry,
   }) async {
-    await _trips.doc(tripId).collection('entries').doc(entry.id).delete();
-
-    if (entry.imagePath case final imagePath?) {
-      try {
-        await _storage.ref(imagePath).delete();
-      } on FirebaseException catch (error) {
-        if (error.code != 'object-not-found') {
-          // The entry is already gone, so photo cleanup can be retried later.
-        }
-      }
-    }
+    await _callFunction('deleteJournalEntry', {
+      'tripId': tripId,
+      'entryId': entry.id,
+    });
   }
 }
 

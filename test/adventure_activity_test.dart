@@ -1,5 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:trekit/features/trips/domain/adventure_activity.dart';
+import 'package:trekit/features/trips/domain/adventure_comment.dart';
+import 'package:trekit/features/trips/domain/adventure_member_event.dart';
 import 'package:trekit/features/trips/domain/journal_entry.dart';
 import 'package:trekit/features/trips/domain/quick_snippet.dart';
 import 'package:trekit/features/trips/domain/trip.dart';
@@ -29,6 +31,8 @@ void main() {
         trip.id: <JournalEntry>[entry],
       },
       const <String, List<QuickSnippet>>{},
+      const <String, List<AdventureComment>>{},
+      const <String, List<AdventureMemberEvent>>{},
     );
 
     expect(feed, hasLength(2));
@@ -63,6 +67,8 @@ void main() {
           'hidden-trip': <JournalEntry>[hiddenEntry],
         },
         const <String, List<QuickSnippet>>{},
+        const <String, List<AdventureComment>>{},
+        const <String, List<AdventureMemberEvent>>{},
       );
 
       expect(feed, hasLength(1));
@@ -93,9 +99,76 @@ void main() {
       {
         trip.id: <QuickSnippet>[snippet],
       },
+      const <String, List<AdventureComment>>{},
+      const <String, List<AdventureMemberEvent>>{},
     );
 
     expect(feed.first.type, AdventureActivityType.quickSnippet);
     expect(feed.first.snippet, snippet);
+  });
+
+  test('includes photo, comment, and non-owner sharing activity', () {
+    final trip = Trip(
+      id: 'trip-1',
+      name: 'Yellowstone',
+      description: '',
+      ownerId: 'owner-1',
+      createdAt: DateTime(2026, 7, 1),
+      updatedAt: DateTime(2026, 7, 5),
+    );
+    final entry = JournalEntry(
+      id: 'entry-1',
+      title: 'Trail view',
+      body: 'A clear afternoon.',
+      authorId: 'owner-1',
+      imagePath: 'users/owner-1/photo',
+      createdAt: DateTime(2026, 7, 2),
+      updatedAt: DateTime(2026, 7, 2),
+    );
+    final comment = AdventureComment(
+      id: 'comment-1',
+      entryId: entry.id,
+      body: 'What a view!',
+      authorId: 'member-1',
+      createdAt: DateTime(2026, 7, 4),
+      updatedAt: DateTime(2026, 7, 4),
+    );
+    final member = AdventureMemberEvent(
+      id: 'member-1',
+      userId: 'member-1',
+      role: 'viewer',
+      createdAt: DateTime(2026, 7, 3),
+    );
+    final ownerMembership = AdventureMemberEvent(
+      id: 'owner-1',
+      userId: 'owner-1',
+      role: 'owner',
+      createdAt: DateTime(2026, 7, 1),
+    );
+
+    final feed = buildAdventureActivityFeed(
+      <Trip>[trip],
+      {
+        trip.id: <JournalEntry>[entry],
+      },
+      const <String, List<QuickSnippet>>{},
+      {
+        trip.id: <AdventureComment>[comment],
+      },
+      {
+        trip.id: <AdventureMemberEvent>[member, ownerMembership],
+      },
+    );
+
+    expect(
+      feed.where((item) => item.type == AdventureActivityType.photoAdded),
+      hasLength(1),
+    );
+    expect(feed.first.type, AdventureActivityType.commentAdded);
+    expect(
+      feed.where((item) => item.type == AdventureActivityType.memberJoined),
+      hasLength(1),
+    );
+    expect(feed.where((item) => item.member?.role == 'owner'), isEmpty);
   });
 }

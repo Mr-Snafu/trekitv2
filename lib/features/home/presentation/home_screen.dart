@@ -1314,8 +1314,42 @@ class _ActivityCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final entry = activity.entry;
     final snippet = activity.snippet;
-    final isEntry = activity.type == AdventureActivityType.journalEntry;
-    final isSnippet = activity.type == AdventureActivityType.quickSnippet;
+    final (icon, title, message) = switch (activity.type) {
+      AdventureActivityType.journalEntry => (
+        Icons.auto_stories_outlined,
+        entry!.title,
+        'A memory was added to ${activity.trip.name}.',
+      ),
+      AdventureActivityType.photoAdded => (
+        Icons.photo_outlined,
+        'Photo added',
+        'A photo was added to ${activity.trip.name}.',
+      ),
+      AdventureActivityType.quickSnippet => (
+        Icons.bolt_outlined,
+        'Quick snippet',
+        snippet!.text,
+      ),
+      AdventureActivityType.commentAdded => (
+        Icons.mode_comment_outlined,
+        'New comment',
+        activity.comment!.body,
+      ),
+      AdventureActivityType.memberJoined => (
+        Icons.person_add_outlined,
+        'Adventure shared',
+        'A trusted person was added to ${activity.trip.name}.',
+      ),
+      AdventureActivityType.adventureStarted => (
+        Icons.flag_outlined,
+        'Adventure started',
+        '${activity.trip.name} was created.',
+      ),
+    };
+    final showEntryBody =
+        activity.type == AdventureActivityType.journalEntry &&
+        entry != null &&
+        entry.body.isNotEmpty;
     final localizations = MaterialLocalizations.of(context);
     return Card(
       clipBehavior: Clip.antiAlias,
@@ -1326,38 +1360,20 @@ class _ActivityCard extends StatelessWidget {
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              CircleAvatar(
-                child: Icon(
-                  isEntry
-                      ? Icons.auto_stories_outlined
-                      : isSnippet
-                      ? Icons.bolt_outlined
-                      : Icons.flag_outlined,
-                ),
-              ),
+              CircleAvatar(child: Icon(icon)),
               const SizedBox(width: 14),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      isEntry
-                          ? entry!.title
-                          : isSnippet
-                          ? 'Quick snippet'
-                          : 'Adventure started',
+                      title,
                       style: Theme.of(context).textTheme.titleMedium
                           ?.copyWith(fontWeight: FontWeight.w700),
                     ),
                     const SizedBox(height: 4),
-                    Text(
-                      isEntry
-                          ? 'A memory was added to ${activity.trip.name}.'
-                          : isSnippet
-                          ? snippet!.text
-                          : '${activity.trip.name} was created.',
-                    ),
-                    if (entry != null && entry.body.isNotEmpty) ...[
+                    Text(message, maxLines: 3, overflow: TextOverflow.ellipsis),
+                    if (showEntryBody) ...[
                       const SizedBox(height: 8),
                       Text(
                         entry.body,
@@ -1383,15 +1399,6 @@ class _ActivityCard extends StatelessWidget {
                           localizations.formatMediumDate(activity.occurredAt),
                           style: Theme.of(context).textTheme.bodySmall,
                         ),
-                        if (entry?.imagePath != null) ...[
-                          const SizedBox(width: 10),
-                          const Icon(Icons.photo_outlined, size: 16),
-                          const SizedBox(width: 4),
-                          Text(
-                            'Photo',
-                            style: Theme.of(context).textTheme.bodySmall,
-                          ),
-                        ],
                       ],
                     ),
                   ],

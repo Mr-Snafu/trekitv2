@@ -254,7 +254,7 @@ exports.exportMyData = onCall(options, async (request) => {
   const userId = requireUser(request);
   const limit = 500;
   const userRef = db.collection("users").doc(userId);
-  const [user, profile, circleProfile, ownedTrips, entries, snippets,
+  const [user, profile, circleProfile, ownedTrips, entries, snippets, comments,
     memberships, circle, incoming, outgoing, blocked] = await Promise.all([
     auth.getUser(userId),
     userRef.get(),
@@ -263,6 +263,8 @@ exports.exportMyData = onCall(options, async (request) => {
     db.collectionGroup("entries").where("authorId", "==", userId)
         .limit(limit + 1).get(),
     db.collectionGroup("snippets").where("authorId", "==", userId)
+        .limit(limit + 1).get(),
+    db.collectionGroup("comments").where("authorId", "==", userId)
         .limit(limit + 1).get(),
     db.collectionGroup("members").where("userId", "==", userId)
         .limit(limit + 1).get(),
@@ -288,6 +290,7 @@ exports.exportMyData = onCall(options, async (request) => {
     ownedAdventures: exportDocuments(ownedTrips, limit),
     authoredEntries: exportDocuments(entries, limit),
     authoredSnippets: exportDocuments(snippets, limit),
+    authoredComments: exportDocuments(comments, limit),
     adventureMemberships: exportDocuments(memberships, limit),
     circle: exportDocuments(circle, 100),
     incomingCircleRequests: exportDocuments(incoming, 100),
@@ -297,6 +300,7 @@ exports.exportMyData = onCall(options, async (request) => {
       ownedAdventures: ownedTrips.size > limit,
       authoredEntries: entries.size > limit,
       authoredSnippets: snippets.size > limit,
+      authoredComments: comments.size > limit,
       adventureMemberships: memberships.size > limit,
     },
   };
@@ -588,6 +592,51 @@ exports.deleteTrip = onCall(options, async (request) => {
   return {deleted: true};
 });
 
+exports.deleteJournalEntry = onCall(options, async (request) => {
+  const userId = requireUser(request);
+  const tripId = requireString(request.data?.tripId, "Trip", 128);
+  const entryId = requireString(request.data?.entryId, "Entry", 128);
+  const tripRef = db.collection("trips").doc(tripId);
+  const entryRef = tripRef.collection("entries").doc(entryId);
+  const [trip, entry, membership] = await Promise.all([
+    tripRef.get(),
+    entryRef.get(),
+    tripRef.collection("members").doc(userId).get(),
+  ]);
+  if (!trip.exists || !entry.exists) {
+    throw new HttpsError("not-found", "Journal entry not found.");
+  }
+  const isOwner = trip.get("ownerId") === userId;
+  const isMemberAuthor = membership.exists && entry.get("authorId") === userId;
+  if (!isOwner && !isMemberAuthor) {
+    throw new HttpsError(
+        "permission-denied", "You cannot delete this journal entry.");
+  }
+
+  const comments = await tripRef.collection("comments")
+      .where("entryId", "==", entryId).limit(500).get();
+  if (comments.size === 500) {
+    throw new HttpsError(
+        "resource-exhausted",
+        "This entry has too many comments to delete safely. Contact support.",
+    );
+  }
+
+  const imagePath = entry.get("imagePath");
+  if (typeof imagePath === "string") {
+    try {
+      await storage.bucket().file(imagePath).delete({ignoreNotFound: true});
+    } catch (error) {
+      console.error("Entry photo cleanup failed", {tripId, entryId, error});
+      throw new HttpsError(
+          "internal", "The journal entry could not be deleted safely.");
+    }
+  }
+  await Promise.all(comments.docs.map((comment) => comment.ref.delete()));
+  await entryRef.delete();
+  return {deleted: true};
+});
+
 exports.listTripMembers = onCall(options, async (request) => {
   const ownerId = requireUser(request);
   const tripId = requireString(request.data?.tripId, "Trip", 128);
@@ -618,6 +667,7 @@ exports.deleteAccount = onCall(accountOptions, async (request) => {
     ownedTrips,
     authoredEntries,
     authoredSnippets,
+    authoredComments,
     memberships,
     circleMirrors,
     incomingMirrors,
@@ -629,6 +679,7 @@ exports.deleteAccount = onCall(accountOptions, async (request) => {
       db.collection("trips").where("ownerId", "==", userId).get(),
       db.collectionGroup("entries").where("authorId", "==", userId).get(),
       db.collectionGroup("snippets").where("authorId", "==", userId).get(),
+      db.collectionGroup("comments").where("authorId", "==", userId).get(),
       db.collectionGroup("members").where("userId", "==", userId).get(),
       db.collectionGroup("circle").where("userId", "==", userId).get(),
       db.collectionGroup("incomingRequests").where("userId", "==", userId).get(),
@@ -641,6 +692,7 @@ exports.deleteAccount = onCall(accountOptions, async (request) => {
     await storage.bucket().deleteFiles({prefix: `users/${userId}/`});
     await Promise.all(authoredEntries.docs.map((entry) => entry.ref.delete()));
     await Promise.all(authoredSnippets.docs.map((snippet) => snippet.ref.delete()));
+    await Promise.all(authoredComments.docs.map((comment) => comment.ref.delete()));
     const circleReferences = [
       ...circleMirrors.docs,
       ...incomingMirrors.docs,

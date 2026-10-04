@@ -67,6 +67,13 @@ service cloud.firestore {
     //   memoryDate: timestamp (optional for legacy entries, never future-dated)
     //   createdAt: timestamp (required, immutable)
     //   updatedAt: timestamp (required)
+    //
+    // trips/{tripId}/comments/{commentId}
+    //   entryId: string (required, immutable, <= 128)
+    //   body: string (required, 1-2000)
+    //   authorId: string (required, immutable, <= 128)
+    //   createdAt: timestamp (required, immutable)
+    //   updatedAt: timestamp (required)
     // ===============================================================
 
     function isAuthenticated() {
@@ -227,6 +234,28 @@ service cloud.firestore {
       ]);
     }
 
+    function isValidComment(data) {
+      return hasRequiredFields(data, [
+          'entryId', 'body', 'authorId', 'createdAt', 'updatedAt'
+        ]) &&
+        hasOnlyAllowedFields(data, [
+          'entryId', 'body', 'authorId', 'createdAt', 'updatedAt'
+        ]) &&
+        isValidId(data.entryId) &&
+        data.body is string &&
+        data.body.size() > 0 &&
+        data.body.size() <= 2000 &&
+        isValidId(data.authorId) &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function commentIdentityUnchanged() {
+      return !request.resource.data.diff(resource.data).affectedKeys().hasAny([
+        'entryId', 'authorId', 'createdAt'
+      ]);
+    }
+
     function isValidSnippet(data) {
       return hasRequiredFields(data, [
           'text', 'authorId', 'capturedAt'
@@ -258,6 +287,10 @@ service cloud.firestore {
 
     function memberPath(tripId, userId) {
       return /databases/$(database)/documents/trips/$(tripId)/members/$(userId);
+    }
+
+    function entryPath(tripId, entryId) {
+      return /databases/$(database)/documents/trips/$(tripId)/entries/$(entryId);
     }
 
     function tripExists(tripId) {
@@ -409,6 +442,27 @@ service cloud.firestore {
             isTripOwner(tripId)) &&
           isValidEntry(request.resource.data, tripId, entryId) &&
           entryIdentityUnchanged() &&
+          isRecent(request.resource.data.updatedAt);
+
+        // Server-side deletion also removes related comments and any photo.
+        allow delete: if false;
+      }
+
+      match /comments/{commentId} {
+        allow read: if isTripMember(tripId);
+
+        allow create: if isTripMember(tripId) &&
+          request.resource.data.authorId == request.auth.uid &&
+          isValidComment(request.resource.data) &&
+          exists(entryPath(tripId, request.resource.data.entryId)) &&
+          isRecent(request.resource.data.createdAt) &&
+          isRecent(request.resource.data.updatedAt);
+
+        allow update: if isTripMember(tripId) &&
+          resource.data.authorId == request.auth.uid &&
+          isValidComment(request.resource.data) &&
+          commentIdentityUnchanged() &&
+          exists(entryPath(tripId, request.resource.data.entryId)) &&
           isRecent(request.resource.data.updatedAt);
 
         allow delete: if isTripMember(tripId) &&
