@@ -1,8 +1,9 @@
 const {initializeApp} = require("firebase-admin/app");
 const {getAuth} = require("firebase-admin/auth");
-const {FieldValue, getFirestore} = require("firebase-admin/firestore");
+const {FieldValue, getFirestore, Timestamp} = require("firebase-admin/firestore");
 const {getStorage} = require("firebase-admin/storage");
 const {HttpsError, onCall, onRequest} = require("firebase-functions/v2/https");
+const crypto = require("node:crypto");
 
 initializeApp();
 
@@ -51,6 +52,268 @@ function requireString(value, name, maxLength) {
   }
   return value.trim();
 }
+
+function requireTrekId(value) {
+  const trekId = requireString(value, "TrekIt ID", 18).toUpperCase();
+  if (!/^TREK-[A-Z0-9]{7,12}$/.test(trekId)) {
+    throw new HttpsError("invalid-argument", "Enter a valid TrekIt ID.");
+  }
+  return trekId;
+}
+
+function displayNameFor(user) {
+  const displayName = user.displayName?.trim();
+  if (displayName && displayName.length <= 80) {
+    return displayName;
+  }
+  return "TrekIt Explorer";
+}
+
+async function ensureCircleProfile(userId) {
+  const profileRef = db.collection("circleProfiles").doc(userId);
+  const existing = await profileRef.get();
+  const user = await auth.getUser(userId);
+  const displayName = displayNameFor(user);
+  if (existing.exists) {
+    if (existing.get("displayName") !== displayName) {
+      await profileRef.update({displayName, updatedAt: FieldValue.serverTimestamp()});
+    }
+    return {userId, trekId: existing.get("trekId"), displayName};
+  }
+
+  const digest = crypto.createHash("sha256").update(userId).digest("hex").toUpperCase();
+  for (let length = 7; length <= 12; length++) {
+    const trekId = `TREK-${digest.slice(0, length)}`;
+    const idRef = db.collection("trekIds").doc(trekId);
+    const created = await db.runTransaction(async (transaction) => {
+      const [reservation, profile] = await Promise.all([
+        transaction.get(idRef),
+        transaction.get(profileRef),
+      ]);
+      if (profile.exists) {
+        return {userId, trekId: profile.get("trekId"), displayName};
+      }
+      if (reservation.exists && reservation.get("userId") !== userId) {
+        return null;
+      }
+      const now = FieldValue.serverTimestamp();
+      transaction.set(idRef, {userId, createdAt: now});
+      transaction.set(profileRef, {
+        userId,
+        trekId,
+        displayName,
+        createdAt: now,
+        updatedAt: now,
+      });
+      return {userId, trekId, displayName};
+    });
+    if (created) return created;
+  }
+  throw new HttpsError("internal", "A TrekIt ID could not be created.");
+}
+
+function circleItem(snapshot) {
+  const data = snapshot.data();
+  return {
+    userId: data.userId,
+    displayName: data.displayName,
+    trekId: data.trekId,
+    status: data.status || "connected",
+    createdAt: data.createdAt?.toDate?.().toISOString() || null,
+    retryAfter: data.retryAfter?.toDate?.().toISOString() || null,
+  };
+}
+
+function userCircleRef(userId, collection, otherUserId) {
+  return db.collection("users").doc(userId)
+      .collection(collection).doc(otherUserId);
+}
+
+exports.getCircleState = onCall(options, async (request) => {
+  const userId = requireUser(request);
+  const profile = await ensureCircleProfile(userId);
+  const userRef = db.collection("users").doc(userId);
+  const [circle, incoming, outgoing, blocked] = await Promise.all([
+    userRef.collection("circle").limit(100).get(),
+    userRef.collection("incomingRequests").limit(100).get(),
+    userRef.collection("outgoingRequests").limit(100).get(),
+    userRef.collection("blocked").limit(100).get(),
+  ]);
+  return {
+    profile,
+    circle: circle.docs.map(circleItem),
+    incoming: incoming.docs.map(circleItem),
+    outgoing: outgoing.docs.map(circleItem),
+    blocked: blocked.docs.map(circleItem),
+  };
+});
+
+exports.sendCircleRequest = onCall(options, async (request) => {
+  const userId = requireUser(request);
+  const trekId = requireTrekId(request.data?.trekId);
+  const [sender, idSnapshot] = await Promise.all([
+    ensureCircleProfile(userId),
+    db.collection("trekIds").doc(trekId).get(),
+  ]);
+  if (!idSnapshot.exists) {
+    throw new HttpsError("not-found", "No account has that TrekIt ID.");
+  }
+  const targetId = idSnapshot.get("userId");
+  if (targetId === userId) {
+    throw new HttpsError("failed-precondition", "That is your own TrekIt ID.");
+  }
+  const target = await ensureCircleProfile(targetId);
+  const senderOutgoing = userCircleRef(userId, "outgoingRequests", targetId);
+  const targetIncoming = userCircleRef(targetId, "incomingRequests", userId);
+  await db.runTransaction(async (transaction) => {
+    const checks = await Promise.all([
+      transaction.get(userCircleRef(userId, "blocked", targetId)),
+      transaction.get(userCircleRef(targetId, "blocked", userId)),
+      transaction.get(userCircleRef(userId, "circle", targetId)),
+      transaction.get(userCircleRef(userId, "incomingRequests", targetId)),
+      transaction.get(senderOutgoing),
+    ]);
+    if (checks[0].exists) {
+      throw new HttpsError("failed-precondition", "Unblock this person first.");
+    }
+    if (checks[1].exists) {
+      throw new HttpsError("failed-precondition", "That request cannot be sent.");
+    }
+    if (checks[2].exists) {
+      throw new HttpsError(
+          "already-exists", "This person is already in your Circle.");
+    }
+    if (checks[3].exists) {
+      throw new HttpsError(
+          "failed-precondition", "This person already invited you.");
+    }
+    if (checks[4].exists) {
+      const retryAfter = checks[4].get("retryAfter")?.toDate?.();
+      if (checks[4].get("status") === "pending" ||
+          (retryAfter && retryAfter > new Date())) {
+        throw new HttpsError(
+            "already-exists",
+            "A request is already pending or cooling down.",
+        );
+      }
+    }
+    const now = FieldValue.serverTimestamp();
+    transaction.set(
+        senderOutgoing, {...target, status: "pending", createdAt: now});
+    transaction.set(
+        targetIncoming, {...sender, status: "pending", createdAt: now});
+  });
+  return {sent: true};
+});
+
+exports.acceptCircleRequest = onCall(options, async (request) => {
+  const userId = requireUser(request);
+  const otherUserId = requireString(request.data?.userId, "Person", 128);
+  const [self, other] = await Promise.all([
+    ensureCircleProfile(userId),
+    ensureCircleProfile(otherUserId),
+  ]);
+  const incomingRef = userCircleRef(userId, "incomingRequests", otherUserId);
+  await db.runTransaction(async (transaction) => {
+    const [incoming, selfBlocked, otherBlocked] = await Promise.all([
+      transaction.get(incomingRef),
+      transaction.get(userCircleRef(userId, "blocked", otherUserId)),
+      transaction.get(userCircleRef(otherUserId, "blocked", userId)),
+    ]);
+    if (!incoming.exists || incoming.get("status") !== "pending") {
+      throw new HttpsError(
+          "not-found", "That invitation is no longer available.");
+    }
+    if (selfBlocked.exists || otherBlocked.exists) {
+      throw new HttpsError(
+          "failed-precondition", "That invitation cannot be accepted.");
+    }
+    const now = FieldValue.serverTimestamp();
+    transaction.set(
+        userCircleRef(userId, "circle", otherUserId),
+        {...other, createdAt: now},
+    );
+    transaction.set(
+        userCircleRef(otherUserId, "circle", userId),
+        {...self, createdAt: now},
+    );
+    transaction.delete(incomingRef);
+    transaction.delete(
+        userCircleRef(otherUserId, "outgoingRequests", userId));
+  });
+  return {accepted: true};
+});
+
+exports.declineCircleRequest = onCall(options, async (request) => {
+  const userId = requireUser(request);
+  const otherUserId = requireString(request.data?.userId, "Person", 128);
+  const incomingRef = userCircleRef(userId, "incomingRequests", otherUserId);
+  const incoming = await incomingRef.get();
+  if (!incoming.exists) {
+    throw new HttpsError("not-found", "That invitation is no longer available.");
+  }
+  const retryAfter = Timestamp.fromMillis(Date.now() + 24 * 60 * 60 * 1000);
+  const batch = db.batch();
+  batch.delete(incomingRef);
+  batch.update(userCircleRef(otherUserId, "outgoingRequests", userId), {
+    status: "cooldown",
+    retryAfter,
+  });
+  await batch.commit();
+  return {declined: true};
+});
+
+exports.removeCircleMember = onCall(options, async (request) => {
+  const userId = requireUser(request);
+  const otherUserId = requireString(request.data?.userId, "Person", 128);
+  const batch = db.batch();
+  batch.delete(userCircleRef(userId, "circle", otherUserId));
+  batch.delete(userCircleRef(otherUserId, "circle", userId));
+  await batch.commit();
+  return {removed: true};
+});
+
+exports.blockCircleMember = onCall(options, async (request) => {
+  const userId = requireUser(request);
+  const otherUserId = requireString(request.data?.userId, "Person", 128);
+  if (otherUserId === userId) {
+    throw new HttpsError("failed-precondition", "You cannot block yourself.");
+  }
+  const relatedSnapshots = await Promise.all([
+    userCircleRef(userId, "circle", otherUserId).get(),
+    userCircleRef(userId, "incomingRequests", otherUserId).get(),
+    userCircleRef(userId, "outgoingRequests", otherUserId).get(),
+  ]);
+  if (!relatedSnapshots.some((snapshot) => snapshot.exists)) {
+    throw new HttpsError(
+        "failed-precondition", "That person is not connected to this account.");
+  }
+  const other = await ensureCircleProfile(otherUserId);
+  const batch = db.batch();
+  batch.set(userCircleRef(userId, "blocked", otherUserId), {
+    ...other,
+    createdAt: FieldValue.serverTimestamp(),
+  });
+  for (const [owner, collection, target] of [
+    [userId, "circle", otherUserId],
+    [otherUserId, "circle", userId],
+    [userId, "incomingRequests", otherUserId],
+    [userId, "outgoingRequests", otherUserId],
+    [otherUserId, "incomingRequests", userId],
+    [otherUserId, "outgoingRequests", userId],
+  ]) {
+    batch.delete(userCircleRef(owner, collection, target));
+  }
+  await batch.commit();
+  return {blocked: true};
+});
+
+exports.unblockCircleMember = onCall(options, async (request) => {
+  const userId = requireUser(request);
+  const otherUserId = requireString(request.data?.userId, "Person", 128);
+  await userCircleRef(userId, "blocked", otherUserId).delete();
+  return {unblocked: true};
+});
 
 async function requireTripOwner(tripId, userId) {
   const tripRef = db.collection("trips").doc(tripId);
@@ -173,21 +436,48 @@ exports.listTripMembers = onCall(options, async (request) => {
 
 exports.deleteAccount = onCall(accountOptions, async (request) => {
   const userId = requireRecentlyAuthenticatedUser(request);
-  const [ownedTrips, authoredEntries, authoredSnippets, memberships] =
+  const userRef = db.collection("users").doc(userId);
+  const [
+    ownedTrips,
+    authoredEntries,
+    authoredSnippets,
+    memberships,
+    circleMirrors,
+    incomingMirrors,
+    outgoingMirrors,
+    blockedMirrors,
+    circleProfile,
+  ] =
     await Promise.all([
-    db.collection("trips").where("ownerId", "==", userId).get(),
-    db.collectionGroup("entries").where("authorId", "==", userId).get(),
-    db.collectionGroup("snippets").where("authorId", "==", userId).get(),
-    db.collectionGroup("members").where("userId", "==", userId).get(),
+      db.collection("trips").where("ownerId", "==", userId).get(),
+      db.collectionGroup("entries").where("authorId", "==", userId).get(),
+      db.collectionGroup("snippets").where("authorId", "==", userId).get(),
+      db.collectionGroup("members").where("userId", "==", userId).get(),
+      db.collectionGroup("circle").where("userId", "==", userId).get(),
+      db.collectionGroup("incomingRequests").where("userId", "==", userId).get(),
+      db.collectionGroup("outgoingRequests").where("userId", "==", userId).get(),
+      db.collectionGroup("blocked").where("userId", "==", userId).get(),
+      db.collection("circleProfiles").doc(userId).get(),
     ]);
 
   try {
     await storage.bucket().deleteFiles({prefix: `users/${userId}/`});
     await Promise.all(authoredEntries.docs.map((entry) => entry.ref.delete()));
     await Promise.all(authoredSnippets.docs.map((snippet) => snippet.ref.delete()));
+    const circleReferences = [
+      ...circleMirrors.docs,
+      ...incomingMirrors.docs,
+      ...outgoingMirrors.docs,
+      ...blockedMirrors.docs,
+    ];
+    await Promise.all(circleReferences.map((document) => document.ref.delete()));
     await Promise.all(ownedTrips.docs.map((trip) => db.recursiveDelete(trip.ref)));
     await Promise.all(memberships.docs.map((member) => member.ref.delete()));
-    await db.collection("users").doc(userId).delete();
+    if (circleProfile.exists) {
+      await db.collection("trekIds").doc(circleProfile.get("trekId")).delete();
+      await circleProfile.ref.delete();
+    }
+    await db.recursiveDelete(userRef);
     await auth.deleteUser(userId);
   } catch (error) {
     console.error("Account deletion failed", {userId, error});

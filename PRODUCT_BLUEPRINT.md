@@ -18,7 +18,7 @@ This document is the source of truth for TrekIt V2 development. TrekIt is a priv
 | Feed | Private, newest-first activity from accessible adventures | Live with adventure, journal-entry, and Quick Snippet activity plus a local retry queue |
 | Adventures | Organize owned and shared trips and open their journals | Live with lifecycle groups, cover images, search, filters, sorting, editing, deletion, sharing, entries, and photos |
 | Create | Start an adventure or add a journal entry from anywhere | Initial creation menu is live |
-| Circle | Manage trusted connections, requests, blocking, and TrekIt IDs | Navigation destination is live; full relationship model is pending |
+| Circle | Manage trusted connections, requests, blocking, and TrekIt IDs | Live with private IDs, requests, cooldowns, remove, block, and unblock controls |
 | Profile | Identity, verification, settings, privacy, export, and account controls | Initial account, verification, password, deletion, and sign-out controls are live |
 
 ## Planned product capabilities
@@ -45,9 +45,9 @@ This document is the source of truth for TrekIt V2 development. TrekIt is a priv
 
 ### Circle
 
-- Give each user a shareable TrekIt ID.
-- Support incoming and outgoing connection requests.
-- Support remove, decline, block, and unblock actions.
+- Each user receives a private, shareable TrekIt ID.
+- Incoming and outgoing connection requests with decline cooldowns are live.
+- Remove, decline, block, and unblock actions are live.
 - Keep Circle relationships separate from access to a specific adventure.
 
 ### Profile
@@ -62,7 +62,7 @@ This document is the source of truth for TrekIt V2 development. TrekIt is a priv
 1. Establish Feed-first navigation and a real private activity timeline.
 2. Add adventure lifecycle states and cover images.
 3. Add Quick Snippets and offline delivery states. (Live)
-4. Build the Circle relationship and invitation model.
+4. Build the Circle relationship and invitation model. (Live)
 5. Expand Profile, notifications, privacy controls, and data export.
 6. Add comments and richer feed events.
 

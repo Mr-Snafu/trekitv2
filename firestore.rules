@@ -16,6 +16,26 @@ service cloud.firestore {
     //   authorId: string (required, immutable, <= 128)
     //   capturedAt: timestamp (required, immutable, never future-dated)
     //
+    // circleProfiles/{uid}
+    //   userId: string (required, immutable)
+    //   trekId: string (required, immutable, server-generated)
+    //   displayName: string (required, server-sourced, 1-80)
+    //   createdAt: timestamp (required, immutable)
+    //   updatedAt: timestamp (required)
+    //
+    // trekIds/{trekId}
+    //   userId: string (required, immutable)
+    //   createdAt: timestamp (required, immutable)
+    //
+    // users/{uid}/{circle|incomingRequests|outgoingRequests|blocked}/{otherUid}
+    //   userId: string (required, immutable, the other user)
+    //   trekId: string (required, immutable)
+    //   displayName: string (required, 1-80)
+    //   status: string (optional: connected, pending, cooldown)
+    //   createdAt: timestamp (required, immutable)
+    //   retryAfter: timestamp (optional)
+    // All Circle documents are written only by authenticated Cloud Functions.
+    //
     // trips/{tripId}
     //   name: string (required, 1-100)
     //   description: string (required, 0-1000)
@@ -269,6 +289,36 @@ service cloud.firestore {
         isRecent(request.resource.data.updatedAt);
 
       allow delete: if isOwner(userId);
+
+      match /circle/{otherUserId} {
+        allow read: if isOwner(userId);
+        allow write: if false;
+      }
+
+      match /incomingRequests/{otherUserId} {
+        allow read: if isOwner(userId);
+        allow write: if false;
+      }
+
+      match /outgoingRequests/{otherUserId} {
+        allow read: if isOwner(userId);
+        allow write: if false;
+      }
+
+      match /blocked/{otherUserId} {
+        allow read: if isOwner(userId);
+        allow write: if false;
+      }
+    }
+
+    // Identity lookup and uniqueness reservations are server-only so TrekIt
+    // does not expose a searchable public profile directory.
+    match /circleProfiles/{userId} {
+      allow read, write: if false;
+    }
+
+    match /trekIds/{trekId} {
+      allow read, write: if false;
     }
 
     // Enables a signed-in user to discover only their own membership records

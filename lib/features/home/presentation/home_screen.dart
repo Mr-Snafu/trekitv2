@@ -1,10 +1,11 @@
-import 'dart:typed_data';
-
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
 
 import '../../auth/data/auth_service.dart';
+import '../../circle/data/circle_repository.dart';
+import '../../circle/domain/circle_state.dart';
 import '../../trips/data/quick_snippet_queue.dart';
 import '../../trips/data/trip_repository.dart';
 import '../../trips/domain/adventure_activity.dart';
@@ -25,6 +26,7 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> {
   late final TripRepository _repository = TripRepository();
+  late final CircleRepository _circleRepository = CircleRepository();
   final _searchController = TextEditingController();
   final Set<String> _busyTripIds = <String>{};
   List<Trip> _latestTrips = const [];
@@ -775,9 +777,7 @@ class _HomeScreenState extends State<HomeScreen> {
               onCreate: _showCreateMenu,
             ),
             1 => _buildAdventuresPage(context),
-            3 => _CirclePage(
-              onOpenAdventures: () => setState(() => _selectedIndex = 1),
-            ),
+            3 => _CirclePage(repository: _circleRepository),
             4 => _ProfilePage(
               user: widget.user,
               isSigningOut: _isSigningOut,
@@ -1417,58 +1417,469 @@ class _FeedEmptyState extends StatelessWidget {
   }
 }
 
-class _CirclePage extends StatelessWidget {
-  const _CirclePage({required this.onOpenAdventures});
+class _CirclePage extends StatefulWidget {
+  const _CirclePage({required this.repository});
 
-  final VoidCallback onOpenAdventures;
+  final CircleRepository repository;
+
+  @override
+  State<_CirclePage> createState() => _CirclePageState();
+}
+
+class _CirclePageState extends State<_CirclePage> {
+  final _trekIdController = TextEditingController();
+  final _busyPeople = <String>{};
+  CircleState? _state;
+  String? _error;
+  bool _isLoading = true;
+  bool _isSending = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  @override
+  void dispose() {
+    _trekIdController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _load() async {
+    if (mounted) {
+      setState(() {
+        _isLoading = true;
+        _error = null;
+      });
+    }
+    try {
+      final state = await widget.repository.getState();
+      if (mounted) setState(() => _state = state);
+    } on CircleServiceException catch (error) {
+      if (mounted) setState(() => _error = error.message);
+    } catch (_) {
+      if (mounted) setState(() => _error = 'Your Circle could not be loaded.');
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
+    }
+  }
+
+  Future<void> _sendRequest() async {
+    final trekId = _trekIdController.text.trim();
+    if (trekId.isEmpty) {
+      _showMessage('Enter a TrekIt ID.');
+      return;
+    }
+    setState(() => _isSending = true);
+    try {
+      await widget.repository.sendRequest(trekId);
+      _trekIdController.clear();
+      await _load();
+      if (mounted) _showMessage('Circle request sent.');
+    } on CircleServiceException catch (error) {
+      if (mounted) _showMessage(error.message);
+    } catch (_) {
+      if (mounted) _showMessage('The request could not be sent.');
+    } finally {
+      if (mounted) setState(() => _isSending = false);
+    }
+  }
+
+  Future<void> _runPersonAction(
+    CirclePerson person,
+    Future<void> Function() action,
+    String successMessage,
+  ) async {
+    setState(() => _busyPeople.add(person.userId));
+    try {
+      await action();
+      await _load();
+      if (mounted) _showMessage(successMessage);
+    } on CircleServiceException catch (error) {
+      if (mounted) _showMessage(error.message);
+    } catch (_) {
+      if (mounted) _showMessage('That action could not be completed.');
+    } finally {
+      if (mounted) setState(() => _busyPeople.remove(person.userId));
+    }
+  }
+
+  Future<void> _confirmRemove(CirclePerson person) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Remove from Circle?'),
+        content: Text(
+          '${person.displayName} will be removed from your Circle. Existing adventure access is not changed.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Remove'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed == true && mounted) {
+      await _runPersonAction(
+        person,
+        () => widget.repository.remove(person.userId),
+        '${person.displayName} was removed from your Circle.',
+      );
+    }
+  }
+
+  Future<void> _confirmBlock(CirclePerson person) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Block this person?'),
+        content: Text(
+          '${person.displayName} will be removed from your Circle and cannot send you requests. Existing adventure access is not changed.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(
+              backgroundColor: Theme.of(context).colorScheme.error,
+            ),
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Block'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed == true && mounted) {
+      await _runPersonAction(
+        person,
+        () => widget.repository.block(person.userId),
+        '${person.displayName} was blocked.',
+      );
+    }
+  }
+
+  void _showMessage(String message) {
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(content: Text(message)));
+  }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Circle')),
-      body: SafeArea(
-        child: ListView(
-          padding: const EdgeInsets.all(20),
-          children: [
-            Text(
-              'Your trusted people',
-              style: Theme.of(context).textTheme.headlineSmall,
-            ),
-            const SizedBox(height: 10),
-            const Text(
-              'Circle invitations and TrekIt IDs are the next collaboration layer. For now, you can securely share access from each adventure.',
-            ),
-            const SizedBox(height: 20),
-            Card(
-              child: Padding(
-                padding: const EdgeInsets.all(20),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    const Icon(Icons.group_outlined, size: 54),
-                    const SizedBox(height: 16),
-                    const Text(
-                      'Share an adventure',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(fontWeight: FontWeight.w700),
-                    ),
-                    const SizedBox(height: 8),
-                    const Text(
-                      'Open one of your adventures and use its sharing controls to invite an existing TrekIt account.',
-                      textAlign: TextAlign.center,
-                    ),
-                    const SizedBox(height: 16),
-                    FilledButton(
-                      onPressed: onOpenAdventures,
-                      child: const Text('Open Adventures'),
-                    ),
-                  ],
+      appBar: AppBar(
+        title: const Text('Circle'),
+        actions: [
+          IconButton(
+            tooltip: 'Refresh Circle',
+            onPressed: _isLoading ? null : _load,
+            icon: const Icon(Icons.refresh),
+          ),
+        ],
+      ),
+      body: SafeArea(child: _buildBody(context)),
+    );
+  }
+
+  Widget _buildBody(BuildContext context) {
+    if (_isLoading && _state == null) {
+      return const Center(child: CircularProgressIndicator());
+    }
+    if (_state == null) {
+      return _MessageState(
+        icon: Icons.cloud_off_outlined,
+        title: 'Circle is unavailable',
+        message: _error ?? 'Check your connection and try again.',
+        actionLabel: 'Try again',
+        onAction: _load,
+      );
+    }
+    final state = _state!;
+    return RefreshIndicator(
+      onRefresh: _load,
+      child: ListView(
+        padding: const EdgeInsets.fromLTRB(20, 20, 20, 32),
+        children: [
+          Text(
+            'Your trusted people',
+            style: Theme.of(context).textTheme.headlineMedium
+                ?.copyWith(fontWeight: FontWeight.w800),
+          ),
+          const SizedBox(height: 8),
+          const Text(
+            'Circle connections make people easier to find. Adventure access remains separate and private.',
+          ),
+          const SizedBox(height: 20),
+          _buildIdentityCard(context, state.profile),
+          const SizedBox(height: 16),
+          _buildInviteCard(context),
+          const SizedBox(height: 24),
+          _sectionTitle(context, 'Current Circle', state.circle.length),
+          if (state.circle.isEmpty)
+            const _CircleEmptyMessage('No one is in your Circle yet.')
+          else
+            for (final person in state.circle)
+              _CirclePersonCard(
+                person: person,
+                busy: _busyPeople.contains(person.userId),
+                primaryLabel: 'Remove',
+                onPrimary: () => _confirmRemove(person),
+                secondaryLabel: 'Block',
+                onSecondary: () => _confirmBlock(person),
+                destructiveSecondary: true,
+              ),
+          const SizedBox(height: 24),
+          _sectionTitle(context, 'Incoming', state.incoming.length),
+          if (state.incoming.isEmpty)
+            const _CircleEmptyMessage('No incoming requests.')
+          else
+            for (final person in state.incoming)
+              _CirclePersonCard(
+                person: person,
+                busy: _busyPeople.contains(person.userId),
+                primaryLabel: 'Accept',
+                onPrimary: () => _runPersonAction(
+                  person,
+                  () => widget.repository.accept(person.userId),
+                  '${person.displayName} joined your Circle.',
+                ),
+                secondaryLabel: 'Decline',
+                onSecondary: () => _runPersonAction(
+                  person,
+                  () => widget.repository.decline(person.userId),
+                  'Request declined.',
                 ),
               ),
+          const SizedBox(height: 24),
+          _sectionTitle(context, 'Outgoing / cooldown', state.outgoing.length),
+          if (state.outgoing.isEmpty)
+            const _CircleEmptyMessage('No outgoing requests.')
+          else
+            for (final person in state.outgoing)
+              _CirclePersonCard(person: person, busy: false),
+          const SizedBox(height: 24),
+          _sectionTitle(context, 'Blocked users', state.blocked.length),
+          if (state.blocked.isEmpty)
+            const _CircleEmptyMessage('No blocked users.')
+          else
+            for (final person in state.blocked)
+              _CirclePersonCard(
+                person: person,
+                busy: _busyPeople.contains(person.userId),
+                primaryLabel: 'Unblock',
+                onPrimary: () => _runPersonAction(
+                  person,
+                  () => widget.repository.unblock(person.userId),
+                  '${person.displayName} was unblocked.',
+                ),
+              ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildIdentityCard(BuildContext context, CircleProfile profile) {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(18),
+        child: Row(
+          children: [
+            const CircleAvatar(child: Icon(Icons.person_outline)),
+            const SizedBox(width: 14),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    profile.displayName,
+                    style: Theme.of(context).textTheme.titleMedium
+                        ?.copyWith(fontWeight: FontWeight.w800),
+                  ),
+                  const SizedBox(height: 4),
+                  SelectableText(profile.trekId),
+                ],
+              ),
+            ),
+            IconButton(
+              tooltip: 'Copy TrekIt ID',
+              onPressed: () async {
+                await Clipboard.setData(ClipboardData(text: profile.trekId));
+                if (mounted) _showMessage('TrekIt ID copied.');
+              },
+              icon: const Icon(Icons.copy_outlined),
             ),
           ],
         ),
       ),
+    );
+  }
+
+  Widget _buildInviteCard(BuildContext context) {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(18),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text(
+              'Invite by TrekIt ID',
+              style: Theme.of(context).textTheme.titleLarge
+                  ?.copyWith(fontWeight: FontWeight.w800),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _trekIdController,
+              enabled: !_isSending,
+              maxLength: 18,
+              textCapitalization: TextCapitalization.characters,
+              decoration: const InputDecoration(
+                labelText: 'TREK-XXXXXXX',
+                prefixIcon: Icon(Icons.person_add_alt_1_outlined),
+              ),
+              onSubmitted: (_) => _isSending ? null : _sendRequest(),
+            ),
+            const SizedBox(height: 8),
+            FilledButton.icon(
+              onPressed: _isSending ? null : _sendRequest,
+              icon: _isSending
+                  ? const SizedBox.square(
+                      dimension: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.send_outlined),
+              label: const Text('Send request'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _sectionTitle(BuildContext context, String title, int count) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: Text(
+        '$title ($count)',
+        style: Theme.of(context).textTheme.headlineSmall
+            ?.copyWith(fontWeight: FontWeight.w800),
+      ),
+    );
+  }
+}
+
+class _CirclePersonCard extends StatelessWidget {
+  const _CirclePersonCard({
+    required this.person,
+    required this.busy,
+    this.primaryLabel,
+    this.onPrimary,
+    this.secondaryLabel,
+    this.onSecondary,
+    this.destructiveSecondary = false,
+  });
+
+  final CirclePerson person;
+  final bool busy;
+  final String? primaryLabel;
+  final VoidCallback? onPrimary;
+  final String? secondaryLabel;
+  final VoidCallback? onSecondary;
+  final bool destructiveSecondary;
+
+  @override
+  Widget build(BuildContext context) {
+    final retryAfter = person.retryAfter;
+    final cooldown = person.status == 'cooldown' && retryAfter != null;
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const CircleAvatar(child: Icon(Icons.person_outline)),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    person.displayName,
+                    style: Theme.of(context).textTheme.titleMedium
+                        ?.copyWith(fontWeight: FontWeight.w700),
+                  ),
+                  const SizedBox(height: 3),
+                  Text(person.trekId),
+                  if (person.status == 'pending') ...[
+                    const SizedBox(height: 4),
+                    const Text('Request pending'),
+                  ],
+                  if (cooldown) ...[
+                    const SizedBox(height: 4),
+                    Text(
+                      'Cooldown until ${MaterialLocalizations.of(context).formatMediumDate(retryAfter.toLocal())}',
+                    ),
+                  ],
+                  if (primaryLabel != null || secondaryLabel != null) ...[
+                    const SizedBox(height: 10),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: [
+                        if (primaryLabel != null)
+                          FilledButton.tonal(
+                            onPressed: busy ? null : onPrimary,
+                            child: Text(primaryLabel!),
+                          ),
+                        if (secondaryLabel != null)
+                          OutlinedButton(
+                            style: destructiveSecondary
+                                ? OutlinedButton.styleFrom(
+                                    foregroundColor: Theme.of(context)
+                                        .colorScheme
+                                        .error,
+                                  )
+                                : null,
+                            onPressed: busy ? null : onSecondary,
+                            child: Text(secondaryLabel!),
+                          ),
+                      ],
+                    ),
+                  ],
+                ],
+              ),
+            ),
+            if (busy)
+              const Padding(
+                padding: EdgeInsets.all(8),
+                child: SizedBox.square(
+                  dimension: 18,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _CircleEmptyMessage extends StatelessWidget {
+  const _CircleEmptyMessage(this.message);
+
+  final String message;
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      child: Padding(padding: const EdgeInsets.all(16), child: Text(message)),
     );
   }
 }
