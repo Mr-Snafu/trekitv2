@@ -10,6 +10,7 @@ import 'package:http/http.dart' as http;
 
 import '../domain/journal_entry.dart';
 import '../domain/adventure_activity.dart';
+import '../domain/quick_snippet.dart';
 import '../domain/trip.dart';
 import '../domain/trip_member.dart';
 
@@ -190,11 +191,14 @@ class TripRepository {
   Stream<List<AdventureActivity>> watchActivityFeed(List<Trip> trips) {
     late final StreamController<List<AdventureActivity>> controller;
     final entriesByTrip = <String, List<JournalEntry>>{};
-    final subscriptions = <StreamSubscription<List<JournalEntry>>>[];
+    final snippetsByTrip = <String, List<QuickSnippet>>{};
+    final subscriptions = <StreamSubscription<dynamic>>[];
 
     void emitFeed() {
       if (!controller.isClosed) {
-        controller.add(buildAdventureActivityFeed(trips, entriesByTrip));
+        controller.add(
+          buildAdventureActivityFeed(trips, entriesByTrip, snippetsByTrip),
+        );
       }
     }
 
@@ -208,6 +212,12 @@ class TripRepository {
               emitFeed();
             }, onError: controller.addError),
           );
+          subscriptions.add(
+            _watchRecentSnippets(trip.id).listen((snippets) {
+              snippetsByTrip[trip.id] = snippets;
+              emitFeed();
+            }, onError: controller.addError),
+          );
         }
       },
       onCancel: () async {
@@ -217,6 +227,50 @@ class TripRepository {
       },
     );
     return controller.stream;
+  }
+
+  Stream<List<QuickSnippet>> _watchRecentSnippets(String tripId) {
+    return _trips
+        .doc(tripId)
+        .collection('snippets')
+        .orderBy('capturedAt', descending: true)
+        .limit(25)
+        .snapshots()
+        .map(
+          (snapshot) => snapshot.docs
+              .map(QuickSnippet.fromFirestore)
+              .toList(growable: false),
+        );
+  }
+
+  Future<void> createSnippet({
+    required String tripId,
+    required String snippetId,
+    required String authorId,
+    required String text,
+    required String location,
+    required DateTime capturedAt,
+  }) async {
+    final trimmedText = text.trim();
+    final trimmedLocation = location.trim();
+    if (trimmedText.isEmpty || trimmedText.length > 1000) {
+      throw ArgumentError(
+        'A quick snippet must be between 1 and 1,000 characters.',
+      );
+    }
+    if (trimmedLocation.length > 160) {
+      throw ArgumentError('The location must be 160 characters or fewer.');
+    }
+    if (capturedAt.isAfter(DateTime.now().add(const Duration(minutes: 1)))) {
+      throw ArgumentError('A quick snippet cannot be dated in the future.');
+    }
+
+    await _trips.doc(tripId).collection('snippets').doc(snippetId).set({
+      'text': trimmedText,
+      if (trimmedLocation.isNotEmpty) 'location': trimmedLocation,
+      'authorId': authorId,
+      'capturedAt': Timestamp.fromDate(capturedAt),
+    });
   }
 
   Stream<List<JournalEntry>> _watchRecentEntries(String tripId) {

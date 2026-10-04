@@ -1,7 +1,8 @@
 import 'journal_entry.dart';
+import 'quick_snippet.dart';
 import 'trip.dart';
 
-enum AdventureActivityType { adventureStarted, journalEntry }
+enum AdventureActivityType { adventureStarted, journalEntry, quickSnippet }
 
 class AdventureActivity {
   const AdventureActivity({
@@ -10,6 +11,7 @@ class AdventureActivity {
     required this.trip,
     required this.occurredAt,
     this.entry,
+    this.snippet,
   });
 
   final String id;
@@ -17,11 +19,13 @@ class AdventureActivity {
   final Trip trip;
   final DateTime occurredAt;
   final JournalEntry? entry;
+  final QuickSnippet? snippet;
 }
 
 List<AdventureActivity> buildAdventureActivityFeed(
   List<Trip> trips,
   Map<String, List<JournalEntry>> entriesByTrip,
+  Map<String, List<QuickSnippet>> snippetsByTrip,
 ) {
   final activities = <AdventureActivity>[
     for (final trip in trips)
@@ -39,6 +43,15 @@ List<AdventureActivity> buildAdventureActivityFeed(
           trip: trip,
           occurredAt: entry.createdAt,
           entry: entry,
+        ),
+    for (final trip in trips)
+      for (final snippet in snippetsByTrip[trip.id] ?? const <QuickSnippet>[])
+        AdventureActivity(
+          id: 'snippet-${trip.id}-${snippet.id}',
+          type: AdventureActivityType.quickSnippet,
+          trip: trip,
+          occurredAt: snippet.capturedAt,
+          snippet: snippet,
         ),
   ];
   activities.sort((a, b) => b.occurredAt.compareTo(a.occurredAt));

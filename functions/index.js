@@ -173,15 +173,18 @@ exports.listTripMembers = onCall(options, async (request) => {
 
 exports.deleteAccount = onCall(accountOptions, async (request) => {
   const userId = requireRecentlyAuthenticatedUser(request);
-  const [ownedTrips, authoredEntries, memberships] = await Promise.all([
+  const [ownedTrips, authoredEntries, authoredSnippets, memberships] =
+    await Promise.all([
     db.collection("trips").where("ownerId", "==", userId).get(),
     db.collectionGroup("entries").where("authorId", "==", userId).get(),
+    db.collectionGroup("snippets").where("authorId", "==", userId).get(),
     db.collectionGroup("members").where("userId", "==", userId).get(),
-  ]);
+    ]);
 
   try {
     await storage.bucket().deleteFiles({prefix: `users/${userId}/`});
     await Promise.all(authoredEntries.docs.map((entry) => entry.ref.delete()));
+    await Promise.all(authoredSnippets.docs.map((snippet) => snippet.ref.delete()));
     await Promise.all(ownedTrips.docs.map((trip) => db.recursiveDelete(trip.ref)));
     await Promise.all(memberships.docs.map((member) => member.ref.delete()));
     await db.collection("users").doc(userId).delete();

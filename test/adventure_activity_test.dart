@@ -1,6 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:trekit/features/trips/domain/adventure_activity.dart';
 import 'package:trekit/features/trips/domain/journal_entry.dart';
+import 'package:trekit/features/trips/domain/quick_snippet.dart';
 import 'package:trekit/features/trips/domain/trip.dart';
 
 void main() {
@@ -27,6 +28,7 @@ void main() {
       {
         trip.id: <JournalEntry>[entry],
       },
+      const <String, List<QuickSnippet>>{},
     );
 
     expect(feed, hasLength(2));
@@ -60,10 +62,40 @@ void main() {
         {
           'hidden-trip': <JournalEntry>[hiddenEntry],
         },
+        const <String, List<QuickSnippet>>{},
       );
 
       expect(feed, hasLength(1));
       expect(feed.single.trip.id, visibleTrip.id);
     },
   );
+
+  test('includes quick snippets in newest-first order', () {
+    final trip = Trip(
+      id: 'trip-1',
+      name: 'Yellowstone',
+      description: 'Family loop',
+      ownerId: 'user-1',
+      createdAt: DateTime(2026, 7, 1),
+      updatedAt: DateTime(2026, 7, 3),
+    );
+    final snippet = QuickSnippet(
+      id: 'snippet-1',
+      text: 'Spotted a bison near the trail.',
+      location: 'Lamar Valley',
+      authorId: 'user-1',
+      capturedAt: DateTime(2026, 7, 4),
+    );
+
+    final feed = buildAdventureActivityFeed(
+      <Trip>[trip],
+      const <String, List<JournalEntry>>{},
+      {
+        trip.id: <QuickSnippet>[snippet],
+      },
+    );
+
+    expect(feed.first.type, AdventureActivityType.quickSnippet);
+    expect(feed.first.snippet, snippet);
+  });
 }

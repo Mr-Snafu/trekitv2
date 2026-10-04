@@ -5,8 +5,10 @@ import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 
 import '../../auth/data/auth_service.dart';
+import '../../trips/data/quick_snippet_queue.dart';
 import '../../trips/data/trip_repository.dart';
 import '../../trips/domain/adventure_activity.dart';
+import '../../trips/domain/quick_snippet.dart';
 import '../../trips/domain/trip.dart';
 import '../../trips/domain/trip_organizer.dart';
 import '../../trips/presentation/trip_detail_screen.dart';
@@ -763,6 +765,7 @@ class _HomeScreenState extends State<HomeScreen> {
           return switch (_selectedIndex) {
             0 => _FeedPage(
               repository: _repository,
+              userId: widget.user.uid,
               trips: trips,
               isLoading:
                   snapshot.connectionState == ConnectionState.waiting &&
@@ -855,9 +858,10 @@ class TrekItNavigationBar extends StatelessWidget {
 
 enum _CreateAction { adventure, entry }
 
-class _FeedPage extends StatelessWidget {
+class _FeedPage extends StatefulWidget {
   const _FeedPage({
     required this.repository,
+    required this.userId,
     required this.trips,
     required this.isLoading,
     required this.error,
@@ -866,11 +870,182 @@ class _FeedPage extends StatelessWidget {
   });
 
   final TripRepository repository;
+  final String userId;
   final List<Trip> trips;
   final bool isLoading;
   final Object? error;
   final ValueChanged<Trip> onOpenTrip;
   final VoidCallback onCreate;
+
+  @override
+  State<_FeedPage> createState() => _FeedPageState();
+}
+
+class _FeedPageState extends State<_FeedPage> {
+  final _textController = TextEditingController();
+  final _locationController = TextEditingController();
+  final _queue = QuickSnippetQueue();
+  late Stream<List<AdventureActivity>> _activityStream;
+  List<QueuedSnippet> _queued = const [];
+  String? _selectedTripId;
+  bool _isPosting = false;
+  bool _isRetrying = false;
+
+  List<Trip> get _editableTrips => widget.trips
+      .where(
+        (trip) => trip.accessRole == 'owner' || trip.accessRole == 'editor',
+      )
+      .toList(growable: false);
+
+  @override
+  void initState() {
+    super.initState();
+    _activityStream = widget.repository.watchActivityFeed(widget.trips);
+    _selectedTripId = _editableTrips.firstOrNull?.id;
+    _loadQueue();
+  }
+
+  @override
+  void didUpdateWidget(covariant _FeedPage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    final oldAccess = oldWidget.trips
+        .map((trip) => '${trip.id}:${trip.accessRole}')
+        .join('|');
+    final newAccess = widget.trips
+        .map((trip) => '${trip.id}:${trip.accessRole}')
+        .join('|');
+    if (oldAccess != newAccess) {
+      _activityStream = widget.repository.watchActivityFeed(widget.trips);
+      if (!_editableTrips.any((trip) => trip.id == _selectedTripId)) {
+        _selectedTripId = _editableTrips.firstOrNull?.id;
+      }
+    }
+  }
+
+  @override
+  void dispose() {
+    _textController.dispose();
+    _locationController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _loadQueue() async {
+    final queued = await _queue.load(widget.userId);
+    if (mounted) {
+      setState(() => _queued = queued);
+    }
+  }
+
+  QueuedSnippet? _draftSnippet() {
+    final text = _textController.text.trim();
+    final location = _locationController.text.trim();
+    final trip = _editableTrips
+        .where((item) => item.id == _selectedTripId)
+        .firstOrNull;
+    if (trip == null) {
+      _showMessage('Choose an adventure you can edit.');
+      return null;
+    }
+    if (text.isEmpty) {
+      _showMessage('Add a quick note first.');
+      return null;
+    }
+    if (text.length > 1000 || location.length > 160) {
+      _showMessage(
+        'Keep the note under 1,000 characters and location under 160.',
+      );
+      return null;
+    }
+    return QueuedSnippet.create(
+      tripId: trip.id,
+      tripName: trip.name,
+      text: text,
+      location: location,
+    );
+  }
+
+  Future<void> _saveLocally() async {
+    final snippet = _draftSnippet();
+    if (snippet == null) return;
+    final queued = await _queue.enqueue(widget.userId, snippet);
+    if (!mounted) return;
+    setState(() => _queued = queued);
+    _clearComposer();
+    _showMessage('Saved locally. It is waiting to be posted.');
+  }
+
+  Future<void> _postSnippet() async {
+    final snippet = _draftSnippet();
+    if (snippet == null) return;
+    setState(() => _isPosting = true);
+    try {
+      await _upload(snippet).timeout(const Duration(seconds: 10));
+      if (!mounted) return;
+      _clearComposer();
+      _showMessage('Quick snippet posted.');
+    } catch (_) {
+      final queued = await _queue.enqueue(widget.userId, snippet);
+      if (!mounted) return;
+      setState(() => _queued = queued);
+      _clearComposer();
+      _showMessage('Could not post now, so it was saved locally for retry.');
+    } finally {
+      if (mounted) setState(() => _isPosting = false);
+    }
+  }
+
+  Future<void> _upload(QueuedSnippet snippet) {
+    return widget.repository.createSnippet(
+      tripId: snippet.tripId,
+      snippetId: snippet.id,
+      authorId: widget.userId,
+      text: snippet.text,
+      location: snippet.location,
+      capturedAt: snippet.capturedAt,
+    );
+  }
+
+  Future<void> _retryQueued() async {
+    if (_queued.isEmpty) return;
+    setState(() => _isRetrying = true);
+    var posted = 0;
+    var remaining = _queued;
+    for (final snippet in List<QueuedSnippet>.from(_queued).reversed) {
+      try {
+        await _upload(snippet).timeout(const Duration(seconds: 10));
+        remaining = await _queue.remove(widget.userId, snippet.id);
+        posted++;
+      } catch (_) {
+        // Keep failed items in the durable queue for the next retry.
+      }
+    }
+    if (!mounted) return;
+    setState(() {
+      _queued = remaining;
+      _isRetrying = false;
+    });
+    _showMessage(
+      posted == 0
+          ? 'Nothing posted yet. Your saved snippets are still safe locally.'
+          : '$posted saved ${posted == 1 ? 'snippet' : 'snippets'} posted.',
+    );
+  }
+
+  Future<void> _discardQueued(String snippetId) async {
+    final queued = await _queue.remove(widget.userId, snippetId);
+    if (mounted) setState(() => _queued = queued);
+  }
+
+  void _clearComposer() {
+    _textController.clear();
+    _locationController.clear();
+  }
+
+  void _showMessage(String message) {
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(content: Text(message)));
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -888,9 +1063,9 @@ class _FeedPage extends StatelessWidget {
         ),
       ),
       body: SafeArea(
-        child: isLoading
+        child: widget.isLoading
             ? const Center(child: CircularProgressIndicator())
-            : error != null && trips.isEmpty
+            : widget.error != null && widget.trips.isEmpty
             ? _MessageState(
                 icon: Icons.cloud_off_outlined,
                 title: 'Feed is unavailable',
@@ -910,11 +1085,23 @@ class _FeedPage extends StatelessWidget {
                     style: Theme.of(context).textTheme.bodyLarge,
                   ),
                   const SizedBox(height: 20),
-                  if (trips.isEmpty)
-                    _FeedEmptyState(onCreate: onCreate)
+                  _buildComposer(context),
+                  if (_queued.isNotEmpty) ...[
+                    const SizedBox(height: 20),
+                    _buildPendingQueue(context),
+                  ],
+                  const SizedBox(height: 24),
+                  Text(
+                    'Adventure activity',
+                    style: Theme.of(context).textTheme.headlineSmall
+                        ?.copyWith(fontWeight: FontWeight.w800),
+                  ),
+                  const SizedBox(height: 12),
+                  if (widget.trips.isEmpty)
+                    _FeedEmptyState(onCreate: widget.onCreate)
                   else
                     StreamBuilder<List<AdventureActivity>>(
-                      stream: repository.watchActivityFeed(trips),
+                      stream: _activityStream,
                       builder: (context, snapshot) {
                         if (snapshot.hasError) {
                           return const _InlineMessage(
@@ -931,14 +1118,14 @@ class _FeedPage extends StatelessWidget {
                         }
                         final activity = snapshot.data!;
                         if (activity.isEmpty) {
-                          return _FeedEmptyState(onCreate: onCreate);
+                          return _FeedEmptyState(onCreate: widget.onCreate);
                         }
                         return Column(
                           children: [
                             for (final item in activity.take(100)) ...[
                               _ActivityCard(
                                 activity: item,
-                                onTap: () => onOpenTrip(item.trip),
+                                onTap: () => widget.onOpenTrip(item.trip),
                               ),
                               const SizedBox(height: 12),
                             ],
@@ -948,6 +1135,164 @@ class _FeedPage extends StatelessWidget {
                     ),
                 ],
               ),
+      ),
+    );
+  }
+
+  Widget _buildComposer(BuildContext context) {
+    final enabled = _editableTrips.isNotEmpty && !_isPosting;
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(18),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Quick Snippet',
+              style: Theme.of(context).textTheme.titleLarge
+                  ?.copyWith(fontWeight: FontWeight.w800),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              'Post a short moment now, or save it locally when your connection is unreliable.',
+              style: Theme.of(context).textTheme.bodyMedium,
+            ),
+            const SizedBox(height: 16),
+            TextField(
+              controller: _textController,
+              enabled: enabled,
+              maxLength: 1000,
+              minLines: 2,
+              maxLines: 5,
+              decoration: const InputDecoration(
+                labelText: 'What happened?',
+                alignLabelWithHint: true,
+              ),
+            ),
+            const SizedBox(height: 10),
+            TextField(
+              controller: _locationController,
+              enabled: enabled,
+              maxLength: 160,
+              decoration: const InputDecoration(
+                labelText: 'Location (optional)',
+                prefixIcon: Icon(Icons.place_outlined),
+              ),
+            ),
+            const SizedBox(height: 10),
+            DropdownButtonFormField<String>(
+              key: ValueKey(
+                'snippet-trip-$_selectedTripId-'
+                '${_editableTrips.map((trip) => trip.id).join('|')}',
+              ),
+              initialValue: _selectedTripId,
+              decoration: const InputDecoration(labelText: 'Adventure'),
+              items: [
+                for (final trip in _editableTrips)
+                  DropdownMenuItem(value: trip.id, child: Text(trip.name)),
+              ],
+              onChanged: enabled
+                  ? (value) => setState(() => _selectedTripId = value)
+                  : null,
+            ),
+            if (_editableTrips.isEmpty) ...[
+              const SizedBox(height: 10),
+              const Text(
+                'Create an adventure or request editor access to post snippets.',
+              ),
+            ],
+            const SizedBox(height: 16),
+            Wrap(
+              spacing: 10,
+              runSpacing: 10,
+              children: [
+                FilledButton.icon(
+                  onPressed: enabled ? _postSnippet : null,
+                  icon: _isPosting
+                      ? const SizedBox.square(
+                          dimension: 18,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.send_outlined),
+                  label: const Text('Post Quick Snippet'),
+                ),
+                OutlinedButton.icon(
+                  onPressed: enabled ? _saveLocally : null,
+                  icon: const Icon(Icons.save_outlined),
+                  label: const Text('Save locally'),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildPendingQueue(BuildContext context) {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(18),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                const Icon(Icons.cloud_upload_outlined),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    'Waiting to post (${_queued.length})',
+                    style: Theme.of(context).textTheme.titleMedium
+                        ?.copyWith(fontWeight: FontWeight.w800),
+                  ),
+                ),
+                TextButton.icon(
+                  onPressed: _isRetrying ? null : _retryQueued,
+                  icon: _isRetrying
+                      ? const SizedBox.square(
+                          dimension: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.refresh),
+                  label: const Text('Retry all'),
+                ),
+              ],
+            ),
+            for (final snippet in _queued) ...[
+              const Divider(height: 24),
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          snippet.text,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          snippet.tripName,
+                          style: Theme.of(context).textTheme.bodySmall,
+                        ),
+                      ],
+                    ),
+                  ),
+                  IconButton(
+                    tooltip: 'Discard saved snippet',
+                    onPressed: _isRetrying
+                        ? null
+                        : () => _discardQueued(snippet.id),
+                    icon: const Icon(Icons.delete_outline),
+                  ),
+                ],
+              ),
+            ],
+          ],
+        ),
       ),
     );
   }
@@ -962,7 +1307,9 @@ class _ActivityCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final entry = activity.entry;
+    final snippet = activity.snippet;
     final isEntry = activity.type == AdventureActivityType.journalEntry;
+    final isSnippet = activity.type == AdventureActivityType.quickSnippet;
     final localizations = MaterialLocalizations.of(context);
     return Card(
       clipBehavior: Clip.antiAlias,
@@ -975,7 +1322,11 @@ class _ActivityCard extends StatelessWidget {
             children: [
               CircleAvatar(
                 child: Icon(
-                  isEntry ? Icons.auto_stories_outlined : Icons.flag_outlined,
+                  isEntry
+                      ? Icons.auto_stories_outlined
+                      : isSnippet
+                      ? Icons.bolt_outlined
+                      : Icons.flag_outlined,
                 ),
               ),
               const SizedBox(width: 14),
@@ -984,7 +1335,11 @@ class _ActivityCard extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      isEntry ? entry!.title : 'Adventure started',
+                      isEntry
+                          ? entry!.title
+                          : isSnippet
+                          ? 'Quick snippet'
+                          : 'Adventure started',
                       style: Theme.of(context).textTheme.titleMedium
                           ?.copyWith(fontWeight: FontWeight.w700),
                     ),
@@ -992,6 +1347,8 @@ class _ActivityCard extends StatelessWidget {
                     Text(
                       isEntry
                           ? 'A memory was added to ${activity.trip.name}.'
+                          : isSnippet
+                          ? snippet!.text
                           : '${activity.trip.name} was created.',
                     ),
                     if (entry != null && entry.body.isNotEmpty) ...[
@@ -1001,6 +1358,16 @@ class _ActivityCard extends StatelessWidget {
                         maxLines: 2,
                         overflow: TextOverflow.ellipsis,
                         style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                    ],
+                    if (snippet != null && snippet.location.isNotEmpty) ...[
+                      const SizedBox(height: 8),
+                      Row(
+                        children: [
+                          const Icon(Icons.place_outlined, size: 16),
+                          const SizedBox(width: 4),
+                          Expanded(child: Text(snippet.location)),
+                        ],
                       ),
                     ],
                     const SizedBox(height: 10),

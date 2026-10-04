@@ -10,6 +10,12 @@ service cloud.firestore {
     //   createdAt: timestamp (required, immutable)
     //   updatedAt: timestamp (required)
     //
+    // trips/{tripId}/snippets/{snippetId}
+    //   text: string (required, 1-1000)
+    //   location: string (optional, 1-160)
+    //   authorId: string (required, immutable, <= 128)
+    //   capturedAt: timestamp (required, immutable, never future-dated)
+    //
     // trips/{tripId}
     //   name: string (required, 1-100)
     //   description: string (required, 0-1000)
@@ -180,6 +186,31 @@ service cloud.firestore {
       ]);
     }
 
+    function isValidSnippet(data) {
+      return hasRequiredFields(data, [
+          'text', 'authorId', 'capturedAt'
+        ]) &&
+        hasOnlyAllowedFields(data, [
+          'text', 'location', 'authorId', 'capturedAt'
+        ]) &&
+        data.text is string &&
+        data.text.size() > 0 &&
+        data.text.size() <= 1000 &&
+        (!('location' in data) ||
+          (data.location is string &&
+            data.location.size() > 0 &&
+            data.location.size() <= 160)) &&
+        isValidId(data.authorId) &&
+        data.capturedAt is timestamp &&
+        data.capturedAt <= request.time + duration.value(1, 'm');
+    }
+
+    function snippetUnchanged() {
+      return !request.resource.data.diff(resource.data).affectedKeys().hasAny([
+        'text', 'location', 'authorId', 'capturedAt'
+      ]);
+    }
+
     function tripPath(tripId) {
       return /databases/$(database)/documents/trips/$(tripId);
     }
@@ -308,6 +339,25 @@ service cloud.firestore {
           isValidEntry(request.resource.data, tripId, entryId) &&
           entryIdentityUnchanged() &&
           isRecent(request.resource.data.updatedAt);
+
+        allow delete: if isTripMember(tripId) &&
+          (resource.data.authorId == request.auth.uid ||
+            isTripOwner(tripId));
+      }
+
+      match /snippets/{snippetId} {
+        allow read: if isTripMember(tripId);
+
+        allow create: if canEditTrip(tripId) &&
+          request.resource.data.authorId == request.auth.uid &&
+          isValidSnippet(request.resource.data);
+
+        // Identical retry writes are allowed so an offline queue can safely
+        // retry without producing duplicates or changing posted content.
+        allow update: if isTripMember(tripId) &&
+          resource.data.authorId == request.auth.uid &&
+          isValidSnippet(request.resource.data) &&
+          snippetUnchanged();
 
         allow delete: if isTripMember(tripId) &&
           (resource.data.authorId == request.auth.uid ||
