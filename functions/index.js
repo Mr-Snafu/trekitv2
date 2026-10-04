@@ -53,6 +53,20 @@ function requireString(value, name, maxLength) {
   return value.trim();
 }
 
+function requireOptionalString(value, name, maxLength) {
+  if (typeof value !== "string" || value.trim().length > maxLength) {
+    throw new HttpsError("invalid-argument", `${name} is invalid.`);
+  }
+  return value.trim();
+}
+
+function requireBoolean(value, name) {
+  if (typeof value !== "boolean") {
+    throw new HttpsError("invalid-argument", `${name} is invalid.`);
+  }
+  return value;
+}
+
 function requireTrekId(value) {
   const trekId = requireString(value, "TrekIt ID", 18).toUpperCase();
   if (!/^TREK-[A-Z0-9]{7,12}$/.test(trekId)) {
@@ -129,6 +143,165 @@ function userCircleRef(userId, collection, otherUserId) {
       .collection(collection).doc(otherUserId);
 }
 
+function profileResult(user, data = {}) {
+  return {
+    userId: user.uid,
+    email: user.email || "",
+    emailVerified: user.emailVerified,
+    displayName: data.displayName || user.displayName || "TrekIt Explorer",
+    bio: data.bio || "",
+    notifyCircleRequests: data.notifyCircleRequests !== false,
+    notifyAdventureActivity: data.notifyAdventureActivity !== false,
+    allowCircleRequests: data.allowCircleRequests !== false,
+  };
+}
+
+exports.getProfileState = onCall(options, async (request) => {
+  const userId = requireUser(request);
+  const [user, profile] = await Promise.all([
+    auth.getUser(userId),
+    db.collection("users").doc(userId).get(),
+  ]);
+  return profileResult(user, profile.data());
+});
+
+exports.updateProfile = onCall(options, async (request) => {
+  const userId = requireUser(request);
+  const displayName = requireString(
+      request.data?.displayName, "Display name", 80);
+  const bio = requireOptionalString(request.data?.bio, "Bio", 240);
+  const notifyCircleRequests = requireBoolean(
+      request.data?.notifyCircleRequests, "Circle notification preference");
+  const notifyAdventureActivity = requireBoolean(
+      request.data?.notifyAdventureActivity,
+      "Adventure notification preference",
+  );
+  const allowCircleRequests = requireBoolean(
+      request.data?.allowCircleRequests, "Circle privacy preference");
+  const userRef = db.collection("users").doc(userId);
+  const circleProfileRef = db.collection("circleProfiles").doc(userId);
+  const [user, existingProfile, circleProfile, circle, incoming, outgoing,
+    blocked] = await Promise.all([
+    auth.getUser(userId),
+    userRef.get(),
+    circleProfileRef.get(),
+    db.collectionGroup("circle").where("userId", "==", userId).limit(100).get(),
+    db.collectionGroup("incomingRequests")
+        .where("userId", "==", userId).limit(100).get(),
+    db.collectionGroup("outgoingRequests")
+        .where("userId", "==", userId).limit(100).get(),
+    db.collectionGroup("blocked")
+        .where("userId", "==", userId).limit(100).get(),
+  ]);
+
+  await auth.updateUser(userId, {displayName});
+  const now = FieldValue.serverTimestamp();
+  const batch = db.batch();
+  batch.set(userRef, {
+    "uid": userId,
+    "email": user.email || "",
+    "displayName": displayName,
+    "bio": bio,
+    "notifyCircleRequests": notifyCircleRequests,
+    "notifyAdventureActivity": notifyAdventureActivity,
+    "allowCircleRequests": allowCircleRequests,
+    updatedAt: now,
+    ...(!existingProfile.exists ? {createdAt: now} : {}),
+  }, {merge: true});
+  if (circleProfile.exists) {
+    batch.update(circleProfileRef, {displayName, updatedAt: now});
+  }
+  for (const snapshot of [circle, incoming, outgoing, blocked]) {
+    for (const document of snapshot.docs) {
+      batch.update(document.ref, {displayName});
+    }
+  }
+  await batch.commit();
+  return profileResult({
+    uid: user.uid,
+    email: user.email,
+    emailVerified: user.emailVerified,
+    displayName,
+  }, {
+    displayName,
+    bio,
+    notifyCircleRequests,
+    notifyAdventureActivity,
+    allowCircleRequests,
+  });
+});
+
+function exportValue(value) {
+  if (value instanceof Timestamp) return value.toDate().toISOString();
+  if (Array.isArray(value)) return value.map(exportValue);
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+        Object.entries(value).map(([key, item]) => [key, exportValue(item)]),
+    );
+  }
+  return value;
+}
+
+function exportDocuments(snapshot, limit) {
+  return snapshot.docs.slice(0, limit).map((document) => ({
+    id: document.id,
+    path: document.ref.path,
+    ...exportValue(document.data()),
+  }));
+}
+
+exports.exportMyData = onCall(options, async (request) => {
+  const userId = requireUser(request);
+  const limit = 500;
+  const userRef = db.collection("users").doc(userId);
+  const [user, profile, circleProfile, ownedTrips, entries, snippets,
+    memberships, circle, incoming, outgoing, blocked] = await Promise.all([
+    auth.getUser(userId),
+    userRef.get(),
+    db.collection("circleProfiles").doc(userId).get(),
+    db.collection("trips").where("ownerId", "==", userId).limit(limit + 1).get(),
+    db.collectionGroup("entries").where("authorId", "==", userId)
+        .limit(limit + 1).get(),
+    db.collectionGroup("snippets").where("authorId", "==", userId)
+        .limit(limit + 1).get(),
+    db.collectionGroup("members").where("userId", "==", userId)
+        .limit(limit + 1).get(),
+    userRef.collection("circle").limit(100).get(),
+    userRef.collection("incomingRequests").limit(100).get(),
+    userRef.collection("outgoingRequests").limit(100).get(),
+    userRef.collection("blocked").limit(100).get(),
+  ]);
+  return {
+    exportVersion: 1,
+    exportedAt: new Date().toISOString(),
+    account: {
+      userId,
+      email: user.email || "",
+      emailVerified: user.emailVerified,
+      displayName: user.displayName || "",
+      createdAt: user.metadata.creationTime || null,
+      lastSignInAt: user.metadata.lastSignInTime || null,
+    },
+    profile: profile.exists ? exportValue(profile.data()) : null,
+    circleProfile: circleProfile.exists ?
+      exportValue(circleProfile.data()) : null,
+    ownedAdventures: exportDocuments(ownedTrips, limit),
+    authoredEntries: exportDocuments(entries, limit),
+    authoredSnippets: exportDocuments(snippets, limit),
+    adventureMemberships: exportDocuments(memberships, limit),
+    circle: exportDocuments(circle, 100),
+    incomingCircleRequests: exportDocuments(incoming, 100),
+    outgoingCircleRequests: exportDocuments(outgoing, 100),
+    blockedUsers: exportDocuments(blocked, 100),
+    truncated: {
+      ownedAdventures: ownedTrips.size > limit,
+      authoredEntries: entries.size > limit,
+      authoredSnippets: snippets.size > limit,
+      adventureMemberships: memberships.size > limit,
+    },
+  };
+});
+
 exports.getCircleState = onCall(options, async (request) => {
   const userId = requireUser(request);
   const profile = await ensureCircleProfile(userId);
@@ -172,11 +345,15 @@ exports.sendCircleRequest = onCall(options, async (request) => {
       transaction.get(userCircleRef(userId, "circle", targetId)),
       transaction.get(userCircleRef(userId, "incomingRequests", targetId)),
       transaction.get(senderOutgoing),
+      transaction.get(db.collection("users").doc(targetId)),
     ]);
     if (checks[0].exists) {
       throw new HttpsError("failed-precondition", "Unblock this person first.");
     }
     if (checks[1].exists) {
+      throw new HttpsError("failed-precondition", "That request cannot be sent.");
+    }
+    if (checks[5].exists && checks[5].get("allowCircleRequests") === false) {
       throw new HttpsError("failed-precondition", "That request cannot be sent.");
     }
     if (checks[2].exists) {

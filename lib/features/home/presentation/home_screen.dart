@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -6,6 +8,9 @@ import 'package:image_picker/image_picker.dart';
 import '../../auth/data/auth_service.dart';
 import '../../circle/data/circle_repository.dart';
 import '../../circle/domain/circle_state.dart';
+import '../../../core/download/download_file.dart';
+import '../../profile/data/profile_repository.dart';
+import '../../profile/domain/profile_state.dart';
 import '../../trips/data/quick_snippet_queue.dart';
 import '../../trips/data/trip_repository.dart';
 import '../../trips/domain/adventure_activity.dart';
@@ -27,6 +32,7 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> {
   late final TripRepository _repository = TripRepository();
   late final CircleRepository _circleRepository = CircleRepository();
+  late final ProfileRepository _profileRepository = ProfileRepository();
   final _searchController = TextEditingController();
   final Set<String> _busyTripIds = <String>{};
   List<Trip> _latestTrips = const [];
@@ -779,7 +785,7 @@ class _HomeScreenState extends State<HomeScreen> {
             1 => _buildAdventuresPage(context),
             3 => _CirclePage(repository: _circleRepository),
             4 => _ProfilePage(
-              user: widget.user,
+              repository: _profileRepository,
               isSigningOut: _isSigningOut,
               isDeletingAccount: _isDeletingAccount,
               onOpenSettings: _openAccountSettings,
@@ -1884,9 +1890,9 @@ class _CircleEmptyMessage extends StatelessWidget {
   }
 }
 
-class _ProfilePage extends StatelessWidget {
+class _ProfilePage extends StatefulWidget {
   const _ProfilePage({
-    required this.user,
+    required this.repository,
     required this.isSigningOut,
     required this.isDeletingAccount,
     required this.onOpenSettings,
@@ -1897,7 +1903,7 @@ class _ProfilePage extends StatelessWidget {
     required this.isRefreshingVerification,
   });
 
-  final User user;
+  final ProfileRepository repository;
   final bool isSigningOut;
   final bool isDeletingAccount;
   final VoidCallback onOpenSettings;
@@ -1908,90 +1914,505 @@ class _ProfilePage extends StatelessWidget {
   final bool isRefreshingVerification;
 
   @override
+  State<_ProfilePage> createState() => _ProfilePageState();
+}
+
+class _ProfilePageState extends State<_ProfilePage> {
+  ProfileState? _profile;
+  String? _error;
+  bool _isLoading = true;
+  bool _isSaving = false;
+  bool _isExporting = false;
+  bool _preferencesDirty = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    setState(() {
+      _isLoading = true;
+      _error = null;
+    });
+    try {
+      final profile = await widget.repository.getState();
+      if (mounted) {
+        setState(() {
+          _profile = profile;
+          _preferencesDirty = false;
+        });
+      }
+    } on ProfileServiceException catch (error) {
+      if (mounted) setState(() => _error = error.message);
+    } catch (_) {
+      if (mounted) setState(() => _error = 'Your profile could not be loaded.');
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
+    }
+  }
+
+  Future<void> _editIdentity() async {
+    final profile = _profile;
+    if (profile == null) return;
+    final draft = await showDialog<_ProfileDraft>(
+      context: context,
+      builder: (_) => _ProfileDialog(profile: profile),
+    );
+    if (draft == null || !mounted) return;
+    await _save(
+      profile.copyWith(displayName: draft.displayName, bio: draft.bio),
+      'Profile updated.',
+    );
+  }
+
+  Future<void> _savePreferences() async {
+    final profile = _profile;
+    if (profile == null) return;
+    await _save(profile, 'Preferences saved.');
+  }
+
+  Future<void> _save(ProfileState profile, String successMessage) async {
+    setState(() => _isSaving = true);
+    try {
+      final updated = await widget.repository.update(profile);
+      if (!mounted) return;
+      setState(() {
+        _profile = updated;
+        _preferencesDirty = false;
+      });
+      _showMessage(successMessage);
+    } on ProfileServiceException catch (error) {
+      if (mounted) _showMessage(error.message);
+    } catch (_) {
+      if (mounted) _showMessage('Your changes could not be saved.');
+    } finally {
+      if (mounted) setState(() => _isSaving = false);
+    }
+  }
+
+  Future<void> _exportData() async {
+    setState(() => _isExporting = true);
+    try {
+      final data = await widget.repository.exportMyData();
+      const encoder = JsonEncoder.withIndent('  ');
+      final json = encoder.convert(data);
+      final date = DateTime.now().toIso8601String().split('T').first;
+      final downloaded = await downloadTextFile(
+        filename: 'trekit-data-$date.json',
+        contents: json,
+        mimeType: 'application/json;charset=utf-8',
+      );
+      if (!downloaded) {
+        await Clipboard.setData(ClipboardData(text: json));
+      }
+      if (mounted) {
+        _showMessage(
+          downloaded
+              ? 'Your TrekIt data export was downloaded.'
+              : 'Your TrekIt data export was copied to the clipboard.',
+        );
+      }
+    } on ProfileServiceException catch (error) {
+      if (mounted) _showMessage(error.message);
+    } catch (_) {
+      if (mounted) _showMessage('Your data export could not be created.');
+    } finally {
+      if (mounted) setState(() => _isExporting = false);
+    }
+  }
+
+  void _showInformation(String title, String message) {
+    showDialog<void>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(title),
+        content: SingleChildScrollView(child: Text(message)),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Close'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showMessage(String message) {
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Profile')),
-      body: SafeArea(
-        child: ListView(
-          padding: const EdgeInsets.all(20),
-          children: [
-            Card(
-              child: Padding(
-                padding: const EdgeInsets.all(20),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    const CircleAvatar(
-                      radius: 36,
-                      child: Icon(Icons.person_outline, size: 38),
-                    ),
-                    const SizedBox(height: 16),
-                    Text(
-                      user.displayName?.trim().isNotEmpty == true
-                          ? user.displayName!.trim()
-                          : 'TrekIt Explorer',
-                      textAlign: TextAlign.center,
-                      style: Theme.of(context).textTheme.headlineSmall,
-                    ),
-                    const SizedBox(height: 6),
-                    Text(
-                      user.email ?? 'TrekIt account',
-                      textAlign: TextAlign.center,
-                    ),
-                    const SizedBox(height: 8),
-                    Chip(
-                      avatar: Icon(
-                        user.emailVerified
-                            ? Icons.verified_outlined
-                            : Icons.mark_email_unread_outlined,
-                      ),
-                      label: Text(
-                        user.emailVerified
-                            ? 'Email verified'
-                            : 'Email not verified',
-                      ),
-                    ),
-                  ],
-                ),
+      appBar: AppBar(
+        title: const Text('Profile'),
+        actions: [
+          IconButton(
+            tooltip: 'Refresh profile',
+            onPressed: _isLoading ? null : _load,
+            icon: const Icon(Icons.refresh),
+          ),
+        ],
+      ),
+      body: SafeArea(child: _buildBody(context)),
+    );
+  }
+
+  Widget _buildBody(BuildContext context) {
+    if (_isLoading && _profile == null) {
+      return const Center(child: CircularProgressIndicator());
+    }
+    if (_profile == null) {
+      return _MessageState(
+        icon: Icons.cloud_off_outlined,
+        title: 'Profile is unavailable',
+        message: _error ?? 'Check your connection and try again.',
+        actionLabel: 'Try again',
+        onAction: _load,
+      );
+    }
+    final profile = _profile!;
+    return RefreshIndicator(
+      onRefresh: _load,
+      child: ListView(
+        padding: const EdgeInsets.fromLTRB(20, 20, 20, 32),
+        children: [
+          _buildIdentityCard(context, profile),
+          if (!profile.emailVerified) ...[
+            const SizedBox(height: 12),
+            OutlinedButton.icon(
+              onPressed: widget.isSendingVerification
+                  ? null
+                  : widget.onSendVerification,
+              icon: const Icon(Icons.outgoing_mail),
+              label: Text(
+                widget.isSendingVerification
+                    ? 'Sending…'
+                    : 'Send verification email',
               ),
             ),
-            if (!user.emailVerified) ...[
-              const SizedBox(height: 12),
-              OutlinedButton.icon(
-                onPressed: isSendingVerification ? null : onSendVerification,
-                icon: const Icon(Icons.outgoing_mail),
-                label: Text(
-                  isSendingVerification
-                      ? 'Sending…'
-                      : 'Send verification email',
-                ),
+            const SizedBox(height: 8),
+            OutlinedButton.icon(
+              onPressed: widget.isRefreshingVerification
+                  ? null
+                  : widget.onRefreshVerification,
+              icon: const Icon(Icons.refresh),
+              label: Text(
+                widget.isRefreshingVerification
+                    ? 'Checking…'
+                    : 'Check verification',
               ),
+            ),
+          ],
+          const SizedBox(height: 20),
+          _buildNotificationsCard(context, profile),
+          const SizedBox(height: 16),
+          _buildPrivacyCard(context, profile),
+          const SizedBox(height: 16),
+          _buildDataAndSupportCard(context),
+          const SizedBox(height: 16),
+          FilledButton.icon(
+            onPressed: widget.isDeletingAccount ? null : widget.onOpenSettings,
+            icon: const Icon(Icons.settings_outlined),
+            label: const Text('Account settings'),
+          ),
+          const SizedBox(height: 12),
+          OutlinedButton.icon(
+            onPressed: widget.isSigningOut ? null : widget.onSignOut,
+            icon: const Icon(Icons.logout),
+            label: Text(widget.isSigningOut ? 'Signing out…' : 'Sign out'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildIdentityCard(BuildContext context, ProfileState profile) {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const CircleAvatar(
+              radius: 36,
+              child: Icon(Icons.person_outline, size: 38),
+            ),
+            const SizedBox(height: 16),
+            Text(
+              profile.displayName,
+              textAlign: TextAlign.center,
+              style: Theme.of(context).textTheme.headlineSmall
+                  ?.copyWith(fontWeight: FontWeight.w800),
+            ),
+            if (profile.bio.isNotEmpty) ...[
               const SizedBox(height: 8),
-              OutlinedButton.icon(
-                onPressed: isRefreshingVerification
-                    ? null
-                    : onRefreshVerification,
-                icon: const Icon(Icons.refresh),
-                label: Text(
-                  isRefreshingVerification ? 'Checking…' : 'Check verification',
-                ),
-              ),
+              Text(profile.bio, textAlign: TextAlign.center),
             ],
-            const SizedBox(height: 12),
-            FilledButton.icon(
-              onPressed: isDeletingAccount ? null : onOpenSettings,
-              icon: const Icon(Icons.settings_outlined),
-              label: const Text('Account settings'),
+            const SizedBox(height: 8),
+            Text(profile.email, textAlign: TextAlign.center),
+            const SizedBox(height: 8),
+            Chip(
+              avatar: Icon(
+                profile.emailVerified
+                    ? Icons.verified_outlined
+                    : Icons.mark_email_unread_outlined,
+              ),
+              label: Text(
+                profile.emailVerified ? 'Email verified' : 'Email not verified',
+              ),
             ),
             const SizedBox(height: 12),
             OutlinedButton.icon(
-              onPressed: isSigningOut ? null : onSignOut,
-              icon: const Icon(Icons.logout),
-              label: Text(isSigningOut ? 'Signing out…' : 'Sign out'),
+              onPressed: _isSaving ? null : _editIdentity,
+              icon: const Icon(Icons.edit_outlined),
+              label: const Text('Edit profile'),
             ),
           ],
         ),
       ),
+    );
+  }
+
+  Widget _buildNotificationsCard(BuildContext context, ProfileState profile) {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(18),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text(
+              'Notification preferences',
+              style: Theme.of(context).textTheme.titleLarge
+                  ?.copyWith(fontWeight: FontWeight.w800),
+            ),
+            const SizedBox(height: 6),
+            const Text(
+              'These choices are saved now and will control notification delivery as channels are enabled.',
+            ),
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              title: const Text('Circle requests'),
+              value: profile.notifyCircleRequests,
+              onChanged: _isSaving
+                  ? null
+                  : (value) => setState(() {
+                      _profile = profile.copyWith(notifyCircleRequests: value);
+                      _preferencesDirty = true;
+                    }),
+            ),
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              title: const Text('Adventure activity'),
+              value: profile.notifyAdventureActivity,
+              onChanged: _isSaving
+                  ? null
+                  : (value) => setState(() {
+                      _profile = profile.copyWith(
+                        notifyAdventureActivity: value,
+                      );
+                      _preferencesDirty = true;
+                    }),
+            ),
+            FilledButton(
+              onPressed: !_preferencesDirty || _isSaving
+                  ? null
+                  : _savePreferences,
+              child: Text(_isSaving ? 'Saving…' : 'Save preferences'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildPrivacyCard(BuildContext context, ProfileState profile) {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(18),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text(
+              'Privacy and sharing',
+              style: Theme.of(context).textTheme.titleLarge
+                  ?.copyWith(fontWeight: FontWeight.w800),
+            ),
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              title: const Text('Allow new Circle requests'),
+              subtitle: const Text(
+                'Turning this off prevents new requests without affecting your current Circle.',
+              ),
+              value: profile.allowCircleRequests,
+              onChanged: _isSaving
+                  ? null
+                  : (value) => setState(() {
+                      _profile = profile.copyWith(allowCircleRequests: value);
+                      _preferencesDirty = true;
+                    }),
+            ),
+            const Divider(),
+            const ListTile(
+              contentPadding: EdgeInsets.zero,
+              leading: Icon(Icons.lock_outline),
+              title: Text('Private by default'),
+              subtitle: Text(
+                'Your profile is not publicly searchable. Adventures are visible only to their authorized members.',
+              ),
+            ),
+            FilledButton(
+              onPressed: !_preferencesDirty || _isSaving
+                  ? null
+                  : _savePreferences,
+              child: Text(_isSaving ? 'Saving…' : 'Save privacy preference'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildDataAndSupportCard(BuildContext context) {
+    return Card(
+      child: Column(
+        children: [
+          ListTile(
+            leading: const Icon(Icons.download_outlined),
+            title: const Text('Download my data'),
+            subtitle: const Text('Export your TrekIt account data as JSON.'),
+            trailing: _isExporting
+                ? const SizedBox.square(
+                    dimension: 20,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Icon(Icons.chevron_right),
+            onTap: _isExporting ? null : _exportData,
+          ),
+          const Divider(height: 1),
+          ListTile(
+            leading: const Icon(Icons.help_outline),
+            title: const Text('Help and support'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => _showInformation(
+              'Help and support',
+              'Use Adventures to create private trips and journal entries. Use Circle to connect with trusted people by TrekIt ID. Circle connections do not automatically grant adventure access.\n\nIf something does not save, check your connection and retry. Quick Snippets saved locally remain in the waiting queue until posted or discarded.',
+            ),
+          ),
+          const Divider(height: 1),
+          ListTile(
+            leading: const Icon(Icons.privacy_tip_outlined),
+            title: const Text('Privacy summary'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => _showInformation(
+              'Privacy summary',
+              'TrekIt is private by default. There is no public feed or public profile directory. Adventure owners control membership, Circle relationships remain separate from adventure access, and blocked users cannot send new Circle requests. You can export or delete your account data from Profile.',
+            ),
+          ),
+          const Divider(height: 1),
+          ListTile(
+            leading: const Icon(Icons.gavel_outlined),
+            title: const Text('Terms of use'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => _showInformation(
+              'Terms of use',
+              'TrekIt is currently an early-access product. Only upload content you have the right to share, respect the privacy of other adventure members, and do not use the service for unlawful or abusive activity. These in-app terms are a product summary and should be replaced with reviewed legal terms before broad release.',
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ProfileDraft {
+  const _ProfileDraft({required this.displayName, required this.bio});
+
+  final String displayName;
+  final String bio;
+}
+
+class _ProfileDialog extends StatefulWidget {
+  const _ProfileDialog({required this.profile});
+
+  final ProfileState profile;
+
+  @override
+  State<_ProfileDialog> createState() => _ProfileDialogState();
+}
+
+class _ProfileDialogState extends State<_ProfileDialog> {
+  late final _nameController = TextEditingController(
+    text: widget.profile.displayName,
+  );
+  late final _bioController = TextEditingController(text: widget.profile.bio);
+
+  bool get _isValid =>
+      _nameController.text.trim().isNotEmpty &&
+      _nameController.text.trim().length <= 80 &&
+      _bioController.text.trim().length <= 240;
+
+  @override
+  void dispose() {
+    _nameController.dispose();
+    _bioController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Edit profile'),
+      content: SizedBox(
+        width: 440,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: _nameController,
+              autofocus: true,
+              maxLength: 80,
+              textCapitalization: TextCapitalization.words,
+              decoration: const InputDecoration(labelText: 'Display name'),
+              onChanged: (_) => setState(() {}),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _bioController,
+              maxLength: 240,
+              minLines: 3,
+              maxLines: 5,
+              decoration: const InputDecoration(
+                labelText: 'About you (optional)',
+                alignLabelWithHint: true,
+              ),
+              onChanged: (_) => setState(() {}),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          onPressed: _isValid
+              ? () => Navigator.pop(
+                  context,
+                  _ProfileDraft(
+                    displayName: _nameController.text.trim(),
+                    bio: _bioController.text.trim(),
+                  ),
+                )
+              : null,
+          child: const Text('Save'),
+        ),
+      ],
     );
   }
 }
@@ -2351,7 +2772,7 @@ class _DeleteAccountDialogState extends State<_DeleteAccountDialog> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             const Text(
-              'This permanently removes your account, adventures you own, journal entries you wrote, uploaded photos, and access to shared adventures. This cannot be undone.',
+              'This permanently removes your account, profile settings, Circle relationships, adventures you own, journal entries and snippets you wrote, uploaded photos, and access to shared adventures. This cannot be undone.',
             ),
             const SizedBox(height: 18),
             const Text('Type DELETE to confirm.'),

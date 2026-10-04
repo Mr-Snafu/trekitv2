@@ -7,6 +7,11 @@ service cloud.firestore {
     // users/{uid}
     //   uid: string (required, immutable, <= 128)
     //   email: string (required, private PII, <= 254)
+    //   displayName: string (optional for legacy users, 1-80)
+    //   bio: string (optional, 0-240)
+    //   notifyCircleRequests: bool (optional, defaults true)
+    //   notifyAdventureActivity: bool (optional, defaults true)
+    //   allowCircleRequests: bool (optional, defaults true)
     //   createdAt: timestamp (required, immutable)
     //   updatedAt: timestamp (required)
     //
@@ -111,9 +116,25 @@ service cloud.firestore {
       return hasRequiredFields(
           data, ['uid', 'email', 'createdAt', 'updatedAt']) &&
         hasOnlyAllowedFields(
-          data, ['uid', 'email', 'createdAt', 'updatedAt']) &&
+          data, [
+            'uid', 'email', 'displayName', 'bio', 'notifyCircleRequests',
+            'notifyAdventureActivity', 'allowCircleRequests', 'createdAt',
+            'updatedAt'
+          ]) &&
         isValidId(data.uid) &&
         isValidEmail(data.email) &&
+        (!('displayName' in data) ||
+          (data.displayName is string &&
+            data.displayName.size() > 0 &&
+            data.displayName.size() <= 80)) &&
+        (!('bio' in data) ||
+          (data.bio is string && data.bio.size() <= 240)) &&
+        (!('notifyCircleRequests' in data) ||
+          data.notifyCircleRequests is bool) &&
+        (!('notifyAdventureActivity' in data) ||
+          data.notifyAdventureActivity is bool) &&
+        (!('allowCircleRequests' in data) ||
+          data.allowCircleRequests is bool) &&
         data.createdAt is timestamp &&
         data.updatedAt is timestamp;
     }
