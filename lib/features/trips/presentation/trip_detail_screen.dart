@@ -7,6 +7,7 @@ import 'package:image_picker/image_picker.dart';
 import '../data/trip_repository.dart';
 import '../domain/journal_entry.dart';
 import '../domain/trip.dart';
+import '../domain/trip_member.dart';
 
 class TripDetailScreen extends StatefulWidget {
   const TripDetailScreen({
@@ -28,6 +29,17 @@ class _TripDetailScreenState extends State<TripDetailScreen> {
   bool _isCreatingEntry = false;
   double? _uploadProgress;
   final Set<String> _busyEntryIds = <String>{};
+
+  bool get _isOwner => widget.trip.ownerId == widget.userId;
+  bool get _canCreateEntry => _isOwner || widget.trip.accessRole == 'editor';
+
+  Future<void> _manageSharing() async {
+    await showDialog<void>(
+      context: context,
+      builder: (_) =>
+          _ManageAccessDialog(trip: widget.trip, repository: widget.repository),
+    );
+  }
 
   Future<void> _createEntry() async {
     final draft = await showDialog<_EntryDraft>(
@@ -172,22 +184,39 @@ class _TripDetailScreenState extends State<TripDetailScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: Text(widget.trip.name)),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: _isCreatingEntry ? null : _createEntry,
-        icon: _isCreatingEntry
-            ? const SizedBox.square(
-                dimension: 18,
-                child: CircularProgressIndicator(strokeWidth: 2),
-              )
-            : const Icon(Icons.edit_note),
-        label: const Text('New entry'),
+      appBar: AppBar(
+        title: Text(widget.trip.name),
+        actions: [
+          if (_isOwner)
+            IconButton(
+              onPressed: _manageSharing,
+              tooltip: 'Manage access',
+              icon: const Icon(Icons.group_add_outlined),
+            ),
+        ],
       ),
+      floatingActionButton: _canCreateEntry
+          ? FloatingActionButton.extended(
+              onPressed: _isCreatingEntry ? null : _createEntry,
+              icon: _isCreatingEntry
+                  ? const SizedBox.square(
+                      dimension: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.edit_note),
+              label: const Text('New entry'),
+            )
+          : null,
       body: SafeArea(
         child: Column(
           children: [
             if (_uploadProgress case final progress?)
               LinearProgressIndicator(value: progress),
+            if (widget.trip.description.isNotEmpty ||
+                widget.trip.location.isNotEmpty ||
+                widget.trip.startDate != null ||
+                widget.trip.endDate != null)
+              _TripOverview(trip: widget.trip),
             Expanded(
               child: StreamBuilder<List<JournalEntry>>(
                 stream: widget.repository.watchEntries(widget.trip.id),
@@ -249,6 +278,8 @@ class _TripDetailScreenState extends State<TripDetailScreen> {
                               if (entry.imagePath case final imagePath?) ...[
                                 _EntryPhoto(
                                   repository: widget.repository,
+                                  tripId: widget.trip.id,
+                                  entryId: entry.id,
                                   imagePath: imagePath,
                                 ),
                                 const SizedBox(height: 16),
@@ -274,7 +305,8 @@ class _TripDetailScreenState extends State<TripDetailScreen> {
                                         ),
                                       ),
                                     )
-                                  else
+                                  else if (_isOwner ||
+                                      entry.authorId == widget.userId)
                                     PopupMenuButton<_EntryAction>(
                                       tooltip: 'Entry options',
                                       onSelected: (action) {
@@ -331,6 +363,71 @@ class _TripDetailScreenState extends State<TripDetailScreen> {
 }
 
 enum _EntryAction { edit, delete }
+
+class _TripOverview extends StatelessWidget {
+  const _TripOverview({required this.trip});
+
+  final Trip trip;
+
+  @override
+  Widget build(BuildContext context) {
+    final localizations = MaterialLocalizations.of(context);
+    final startDate = trip.startDate;
+    final endDate = trip.endDate;
+    final dateLabel = startDate != null && endDate != null
+        ? '${localizations.formatMediumDate(startDate)} – ${localizations.formatMediumDate(endDate)}'
+        : startDate != null || endDate != null
+        ? localizations.formatMediumDate(startDate ?? endDate!)
+        : null;
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(20, 12, 20, 0),
+      child: Card(
+        child: Padding(
+          padding: const EdgeInsets.all(18),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              if (trip.location.isNotEmpty)
+                _OverviewRow(icon: Icons.place_outlined, text: trip.location),
+              if (trip.location.isNotEmpty && dateLabel != null)
+                const SizedBox(height: 8),
+              if (dateLabel != null)
+                _OverviewRow(
+                  icon: Icons.calendar_today_outlined,
+                  text: dateLabel,
+                ),
+              if ((trip.location.isNotEmpty || dateLabel != null) &&
+                  trip.description.isNotEmpty)
+                const SizedBox(height: 12),
+              if (trip.description.isNotEmpty) Text(trip.description),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _OverviewRow extends StatelessWidget {
+  const _OverviewRow({required this.icon, required this.text});
+
+  final IconData icon;
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        Icon(icon, size: 18),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Text(text, style: Theme.of(context).textTheme.labelLarge),
+        ),
+      ],
+    );
+  }
+}
 
 class _EntryTextDraft {
   const _EntryTextDraft({required this.title, required this.body});
@@ -485,9 +582,8 @@ class _CreateEntryDialogState extends State<_CreateEntryDialog> {
                     borderRadius: BorderRadius.circular(12),
                     child: Image.memory(
                       imageBytes,
-                      height: 180,
                       width: double.infinity,
-                      fit: BoxFit.cover,
+                      fit: BoxFit.fitWidth,
                     ),
                   ),
                   const SizedBox(height: 8),
@@ -619,10 +715,239 @@ class _EditEntryDialogState extends State<_EditEntryDialog> {
   }
 }
 
+class _ManageAccessDialog extends StatefulWidget {
+  const _ManageAccessDialog({required this.trip, required this.repository});
+
+  final Trip trip;
+  final TripRepository repository;
+
+  @override
+  State<_ManageAccessDialog> createState() => _ManageAccessDialogState();
+}
+
+class _ManageAccessDialogState extends State<_ManageAccessDialog> {
+  final _emailController = TextEditingController();
+  late Future<List<TripMember>> _members = _loadMembers();
+  String _role = 'viewer';
+  bool _isSharing = false;
+  String? _error;
+
+  Future<List<TripMember>> _loadMembers() {
+    return widget.repository.listTripMembers(widget.trip.id);
+  }
+
+  @override
+  void dispose() {
+    _emailController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _share() async {
+    final email = _emailController.text.trim();
+    if (email.isEmpty || !email.contains('@')) {
+      setState(
+        () => _error = 'Enter the email for an existing TrekIt account.',
+      );
+      return;
+    }
+
+    setState(() {
+      _isSharing = true;
+      _error = null;
+    });
+    try {
+      await widget.repository.shareTrip(
+        tripId: widget.trip.id,
+        email: email,
+        role: _role,
+      );
+      if (mounted) {
+        _emailController.clear();
+        setState(() => _members = _loadMembers());
+      }
+    } on TripServiceException catch (error) {
+      if (mounted) {
+        setState(() => _error = error.message);
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _isSharing = false);
+      }
+    }
+  }
+
+  Future<void> _remove(TripMember member) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Remove access?'),
+        content: Text(
+          '${member.email} will no longer be able to open this trip.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Remove'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) {
+      return;
+    }
+
+    try {
+      await widget.repository.removeTripMember(
+        tripId: widget.trip.id,
+        memberId: member.userId,
+      );
+      if (mounted) {
+        setState(() => _members = _loadMembers());
+      }
+    } on TripServiceException catch (error) {
+      if (mounted) {
+        setState(() => _error = error.message);
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Share this adventure'),
+      content: SizedBox(
+        width: 520,
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              const Text(
+                'Add someone who already has a TrekIt account. Viewers can read the journal; editors can also add entries.',
+              ),
+              const SizedBox(height: 16),
+              TextField(
+                controller: _emailController,
+                keyboardType: TextInputType.emailAddress,
+                autofillHints: const [AutofillHints.email],
+                decoration: const InputDecoration(
+                  labelText: 'TrekIt account email',
+                ),
+              ),
+              const SizedBox(height: 12),
+              DropdownButtonFormField<String>(
+                initialValue: _role,
+                decoration: const InputDecoration(labelText: 'Access level'),
+                items: const [
+                  DropdownMenuItem(value: 'viewer', child: Text('Viewer')),
+                  DropdownMenuItem(value: 'editor', child: Text('Editor')),
+                ],
+                onChanged: _isSharing
+                    ? null
+                    : (value) => setState(() => _role = value ?? 'viewer'),
+              ),
+              if (_error case final error?) ...[
+                const SizedBox(height: 10),
+                Text(
+                  error,
+                  style: TextStyle(color: Theme.of(context).colorScheme.error),
+                ),
+              ],
+              const SizedBox(height: 14),
+              Align(
+                alignment: Alignment.centerRight,
+                child: FilledButton.icon(
+                  onPressed: _isSharing ? null : _share,
+                  icon: _isSharing
+                      ? const SizedBox.square(
+                          dimension: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.person_add_alt_1),
+                  label: const Text('Add person'),
+                ),
+              ),
+              const Divider(height: 32),
+              Text(
+                'People with access',
+                style: Theme.of(context).textTheme.titleMedium,
+              ),
+              const SizedBox(height: 8),
+              FutureBuilder<List<TripMember>>(
+                future: _members,
+                builder: (context, snapshot) {
+                  if (snapshot.connectionState == ConnectionState.waiting) {
+                    return const Center(child: CircularProgressIndicator());
+                  }
+                  if (snapshot.hasError) {
+                    return const Text('The access list could not be loaded.');
+                  }
+                  final members = snapshot.data ?? const <TripMember>[];
+                  return Column(
+                    children: members
+                        .map((member) {
+                          final isOwner = member.role == 'owner';
+                          return ListTile(
+                            contentPadding: EdgeInsets.zero,
+                            leading: CircleAvatar(
+                              child: Icon(
+                                isOwner
+                                    ? Icons.star_outline
+                                    : Icons.person_outline,
+                              ),
+                            ),
+                            title: Text(member.email),
+                            subtitle: Text(
+                              isOwner
+                                  ? 'Owner'
+                                  : member.role == 'editor'
+                                  ? 'Editor'
+                                  : 'Viewer',
+                            ),
+                            trailing: isOwner
+                                ? null
+                                : IconButton(
+                                    onPressed: () => _remove(member),
+                                    tooltip: 'Remove access',
+                                    icon: const Icon(
+                                      Icons.person_remove_outlined,
+                                    ),
+                                  ),
+                          );
+                        })
+                        .toList(growable: false),
+                  );
+                },
+              ),
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Done'),
+        ),
+      ],
+    );
+  }
+}
+
 class _EntryPhoto extends StatefulWidget {
-  const _EntryPhoto({required this.repository, required this.imagePath});
+  const _EntryPhoto({
+    required this.repository,
+    required this.tripId,
+    required this.entryId,
+    required this.imagePath,
+  });
 
   final TripRepository repository;
+  final String tripId;
+  final String entryId;
   final String imagePath;
 
   @override
@@ -630,30 +955,46 @@ class _EntryPhoto extends StatefulWidget {
 }
 
 class _EntryPhotoState extends State<_EntryPhoto> {
-  late Future<Uint8List?> _image = widget.repository.loadEntryImage(
-    widget.imagePath,
+  late Future<Uint8List> _image = widget.repository.getEntryPhoto(
+    tripId: widget.tripId,
+    entryId: widget.entryId,
   );
 
   @override
   void didUpdateWidget(covariant _EntryPhoto oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.imagePath != widget.imagePath) {
-      _image = widget.repository.loadEntryImage(widget.imagePath);
+    if (oldWidget.imagePath != widget.imagePath ||
+        oldWidget.entryId != widget.entryId ||
+        oldWidget.tripId != widget.tripId) {
+      _image = widget.repository.getEntryPhoto(
+        tripId: widget.tripId,
+        entryId: widget.entryId,
+      );
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    return FutureBuilder<Uint8List?>(
+    return FutureBuilder<Uint8List>(
       future: _image,
       builder: (context, snapshot) {
         if (snapshot.hasError) {
+          debugPrint(
+            'Photo load failed for ${widget.imagePath}: ${snapshot.error}',
+          );
           return Container(
             height: 160,
             width: double.infinity,
             color: Theme.of(context).colorScheme.surfaceContainerHighest,
             alignment: Alignment.center,
-            child: const Icon(Icons.broken_image_outlined, size: 40),
+            child: const Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.broken_image_outlined, size: 40),
+                SizedBox(height: 8),
+                Text('Photo unavailable'),
+              ],
+            ),
           );
         }
         if (!snapshot.hasData) {
@@ -674,9 +1015,8 @@ class _EntryPhotoState extends State<_EntryPhoto> {
             ),
             child: Image.memory(
               imageBytes,
-              height: 220,
               width: double.infinity,
-              fit: BoxFit.cover,
+              fit: BoxFit.fitWidth,
               cacheWidth: 1200,
               filterQuality: FilterQuality.medium,
             ),

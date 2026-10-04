@@ -1,0 +1,21 @@
+[
+  {
+    "origin": [
+      "http://127.0.0.1:7357",
+      "http://localhost:7357",
+      "https://trekit.online",
+      "https://trekit-10e88.web.app",
+      "https://trekit-10e88.firebaseapp.com"
+    ],
+    "method": [
+      "GET",
+      "HEAD"
+    ],
+    "responseHeader": [
+      "Content-Type",
+      "Content-Length",
+      "Content-Range"
+    ],
+    "maxAgeSeconds": 3600
+  }
+]

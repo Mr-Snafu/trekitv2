@@ -32,9 +32,19 @@ migrate_working_dir/
 .pub/
 /build/
 /coverage/
+**/node_modules/
 .firebase/
 firebase-debug.log
 firebase-debug.*.log
+
+# Local release verification artifacts
+FIRESTORE_RULE_REVIEW.local.md
+account-*.png
+adventure-*.png
+live-release.png
+mobile-*-release.png
+photo-*.png
+sharing-phase.png
 
 # Symbolication related
 app.*.symbols

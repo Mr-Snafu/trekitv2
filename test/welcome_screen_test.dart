@@ -22,6 +22,20 @@ void main() {
     expect(find.text('Welcome back'), findsOneWidget);
     expect(find.text('Email'), findsOneWidget);
     expect(find.text('Password'), findsOneWidget);
+    expect(find.text('Forgot password?'), findsOneWidget);
+  });
+
+  testWidgets('forgot password opens the reset form', (tester) async {
+    await tester.pumpWidget(
+      const TrekItApp(home: EmailAuthScreen(mode: AuthMode.signIn)),
+    );
+
+    await tester.tap(find.text('Forgot password?'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Reset your password'), findsOneWidget);
+    expect(find.text('Account email'), findsOneWidget);
+    expect(find.text('Send reset link'), findsOneWidget);
   });
 
   testWidgets('create account opens confirmation form', (tester) async {

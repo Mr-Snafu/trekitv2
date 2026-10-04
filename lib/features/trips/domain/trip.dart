@@ -8,6 +8,10 @@ class Trip {
     required this.ownerId,
     required this.createdAt,
     required this.updatedAt,
+    this.location = '',
+    this.startDate,
+    this.endDate,
+    this.accessRole = 'owner',
   });
 
   final String id;
@@ -16,6 +20,10 @@ class Trip {
   final String ownerId;
   final DateTime createdAt;
   final DateTime updatedAt;
+  final String location;
+  final DateTime? startDate;
+  final DateTime? endDate;
+  final String accessRole;
 
   factory Trip.fromFirestore(DocumentSnapshot<Map<String, dynamic>> snapshot) {
     final data = snapshot.data() ?? const <String, dynamic>{};
@@ -26,10 +34,32 @@ class Trip {
       ownerId: data['ownerId'] as String? ?? '',
       createdAt: _dateFrom(data['createdAt']),
       updatedAt: _dateFrom(data['updatedAt']),
+      location: data['location'] as String? ?? '',
+      startDate: _optionalDateFrom(data['startDate']),
+      endDate: _optionalDateFrom(data['endDate']),
+    );
+  }
+
+  Trip withAccessRole(String role) {
+    return Trip(
+      id: id,
+      name: name,
+      description: description,
+      ownerId: ownerId,
+      createdAt: createdAt,
+      updatedAt: updatedAt,
+      location: location,
+      startDate: startDate,
+      endDate: endDate,
+      accessRole: role,
     );
   }
 
   static DateTime _dateFrom(Object? value) {
     return value is Timestamp ? value.toDate() : DateTime.now();
+  }
+
+  static DateTime? _optionalDateFrom(Object? value) {
+    return value is Timestamp ? value.toDate() : null;
   }
 }

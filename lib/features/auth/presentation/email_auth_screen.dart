@@ -22,6 +22,7 @@ class _EmailAuthScreenState extends State<EmailAuthScreen> {
   final _confirmPasswordController = TextEditingController();
 
   bool _isSubmitting = false;
+  bool _isResettingPassword = false;
   bool _obscurePassword = true;
   String? _errorMessage;
 
@@ -80,6 +81,48 @@ class _EmailAuthScreenState extends State<EmailAuthScreen> {
     }
   }
 
+  Future<void> _resetPassword() async {
+    final email = await showDialog<String>(
+      context: context,
+      builder: (_) =>
+          _PasswordResetDialog(initialEmail: _emailController.text.trim()),
+    );
+    if (email == null || !mounted) {
+      return;
+    }
+
+    setState(() {
+      _isResettingPassword = true;
+      _errorMessage = null;
+    });
+    try {
+      await AuthService().sendPasswordResetEmail(email);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'If that email belongs to a TrekIt account, a reset link is on its way.',
+            ),
+          ),
+        );
+      }
+    } on FirebaseAuthException catch (error) {
+      if (mounted) {
+        setState(() {
+          _errorMessage = error.code == 'too-many-requests'
+              ? 'Please wait before requesting another reset email.'
+              : error.code == 'network-request-failed'
+              ? 'Check your internet connection and try again.'
+              : 'The reset email could not be sent. Please try again.';
+        });
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _isResettingPassword = false);
+      }
+    }
+  }
+
   String _messageFor(FirebaseAuthException error) {
     return switch (error.code) {
       'invalid-email' => 'Enter a valid email address.',
@@ -117,7 +160,7 @@ class _EmailAuthScreenState extends State<EmailAuthScreen> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    Image.asset('trekit-t.png', height: 72),
+                    Image.asset('trekit-family.png', height: 140),
                     const SizedBox(height: 24),
                     Text(
                       title,
@@ -193,6 +236,21 @@ class _EmailAuthScreenState extends State<EmailAuthScreen> {
                         return null;
                       },
                     ),
+                    if (!_isCreatingAccount) ...[
+                      Align(
+                        alignment: Alignment.centerRight,
+                        child: TextButton(
+                          onPressed: _isSubmitting || _isResettingPassword
+                              ? null
+                              : _resetPassword,
+                          child: Text(
+                            _isResettingPassword
+                                ? 'Sending reset link…'
+                                : 'Forgot password?',
+                          ),
+                        ),
+                      ),
+                    ],
                     if (_isCreatingAccount) ...[
                       const SizedBox(height: 16),
                       TextFormField(
@@ -250,6 +308,75 @@ class _EmailAuthScreenState extends State<EmailAuthScreen> {
           ),
         ),
       ),
+    );
+  }
+}
+
+class _PasswordResetDialog extends StatefulWidget {
+  const _PasswordResetDialog({required this.initialEmail});
+
+  final String initialEmail;
+
+  @override
+  State<_PasswordResetDialog> createState() => _PasswordResetDialogState();
+}
+
+class _PasswordResetDialogState extends State<_PasswordResetDialog> {
+  final _formKey = GlobalKey<FormState>();
+  late final _emailController = TextEditingController(
+    text: widget.initialEmail,
+  );
+
+  @override
+  void dispose() {
+    _emailController.dispose();
+    super.dispose();
+  }
+
+  void _submit() {
+    if (!(_formKey.currentState?.validate() ?? false)) {
+      return;
+    }
+    Navigator.of(context).pop(_emailController.text.trim());
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Reset your password'),
+      content: Form(
+        key: _formKey,
+        child: SizedBox(
+          width: 420,
+          child: TextFormField(
+            controller: _emailController,
+            autofocus: true,
+            keyboardType: TextInputType.emailAddress,
+            autofillHints: const [AutofillHints.email],
+            textInputAction: TextInputAction.done,
+            onFieldSubmitted: (_) => _submit(),
+            decoration: const InputDecoration(
+              labelText: 'Account email',
+              prefixIcon: Icon(Icons.email_outlined),
+            ),
+            validator: (value) {
+              final email = value?.trim() ?? '';
+              if (email.isEmpty ||
+                  !RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$').hasMatch(email)) {
+                return 'Enter a valid email address.';
+              }
+              return null;
+            },
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(onPressed: _submit, child: const Text('Send reset link')),
+      ],
     );
   }
 }

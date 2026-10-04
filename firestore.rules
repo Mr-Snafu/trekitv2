@@ -13,6 +13,9 @@ service cloud.firestore {
     // trips/{tripId}
     //   name: string (required, 1-100)
     //   description: string (required, 0-1000)
+    //   location: string (optional, 1-160)
+    //   startDate: timestamp (optional)
+    //   endDate: timestamp (optional, not before startDate when both exist)
     //   ownerId: string (required, immutable, <= 128)
     //   createdAt: timestamp (required, immutable)
     //   updatedAt: timestamp (required)
@@ -91,13 +94,22 @@ service cloud.firestore {
           'name', 'description', 'ownerId', 'createdAt', 'updatedAt'
         ]) &&
         hasOnlyAllowedFields(data, [
-          'name', 'description', 'ownerId', 'createdAt', 'updatedAt'
+          'name', 'description', 'location', 'startDate', 'endDate',
+          'ownerId', 'createdAt', 'updatedAt'
         ]) &&
         data.name is string &&
         data.name.size() > 0 &&
         data.name.size() <= 100 &&
         data.description is string &&
         data.description.size() <= 1000 &&
+        (!('location' in data) ||
+          (data.location is string &&
+            data.location.size() > 0 &&
+            data.location.size() <= 160)) &&
+        (!('startDate' in data) || data.startDate is timestamp) &&
+        (!('endDate' in data) || data.endDate is timestamp) &&
+        (!(('startDate' in data) && ('endDate' in data)) ||
+          data.endDate >= data.startDate) &&
         isValidId(data.ownerId) &&
         data.createdAt is timestamp &&
         data.updatedAt is timestamp;
@@ -207,6 +219,13 @@ service cloud.firestore {
         isRecent(request.resource.data.updatedAt);
 
       allow delete: if isOwner(userId);
+    }
+
+    // Enables a signed-in user to discover only their own membership records
+    // across trips. The client query must include userId == request.auth.uid.
+    match /{path=**}/members/{memberId} {
+      allow read: if isAuthenticated() &&
+        resource.data.userId == request.auth.uid;
     }
 
     match /trips/{tripId} {

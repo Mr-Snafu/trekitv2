@@ -1,12 +1,13 @@
 {
-    "name": "trekit",
-    "short_name": "trekit",
-    "start_url": ".",
+    "id": "/",
+    "name": "TrekIt – Private Adventure Journal",
+    "short_name": "TrekIt",
+    "start_url": "/",
+    "scope": "/",
     "display": "standalone",
-    "background_color": "#0175C2",
-    "theme_color": "#0175C2",
-    "description": "A new Flutter project.",
-    "orientation": "portrait-primary",
+    "background_color": "#FFF8EA",
+    "theme_color": "#073E47",
+    "description": "Capture private adventures and share memories with people you trust.",
     "prefer_related_applications": false,
     "icons": [
         {

@@ -69,11 +69,11 @@ class _StoryPanel extends StatelessWidget {
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
                 ClipRRect(
-                  borderRadius: BorderRadius.circular(18),
+                  borderRadius: BorderRadius.circular(24),
                   child: Image.asset(
                     'trekit-family.png',
-                    width: compact ? 60 : 92,
-                    height: compact ? 60 : 92,
+                    width: compact ? 144 : 128,
+                    height: compact ? 144 : 128,
                   ),
                 ),
                 ConstrainedBox(

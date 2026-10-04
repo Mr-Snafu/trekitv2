@@ -18,8 +18,12 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> {
   late final TripRepository _repository = TripRepository();
+  final Set<String> _busyTripIds = <String>{};
   bool _isSigningOut = false;
   bool _isCreatingTrip = false;
+  bool _isSendingVerification = false;
+  bool _isRefreshingVerification = false;
+  bool _isDeletingAccount = false;
 
   @override
   void initState() {
@@ -48,10 +52,74 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
+  Future<void> _openAccountSettings() async {
+    final action = await showDialog<_AccountAction>(
+      context: context,
+      builder: (_) => _AccountDialog(user: widget.user),
+    );
+    if (action == null || !mounted) {
+      return;
+    }
+
+    switch (action) {
+      case _AccountAction.resetPassword:
+        await _sendPasswordReset();
+        return;
+      case _AccountAction.deleteAccount:
+        await _confirmAndDeleteAccount();
+        return;
+    }
+  }
+
+  Future<void> _sendPasswordReset() async {
+    final email = widget.user.email;
+    if (email == null || email.isEmpty) {
+      _showMessage('No email address is available for this account.');
+      return;
+    }
+    try {
+      await widget.authService.sendPasswordResetEmail(email);
+      if (mounted) {
+        _showMessage('Password reset email sent.');
+      }
+    } on FirebaseAuthException {
+      if (mounted) {
+        _showMessage('The password reset email could not be sent.');
+      }
+    }
+  }
+
+  Future<void> _confirmAndDeleteAccount() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (_) => const _DeleteAccountDialog(),
+    );
+    if (confirmed != true || !mounted) {
+      return;
+    }
+
+    setState(() => _isDeletingAccount = true);
+    try {
+      await widget.authService.deleteAccount();
+    } on AccountServiceException catch (error) {
+      if (mounted) {
+        _showMessage(error.message);
+      }
+    } catch (_) {
+      if (mounted) {
+        _showMessage('Your account could not be deleted. Please try again.');
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _isDeletingAccount = false);
+      }
+    }
+  }
+
   Future<void> _createTrip() async {
     final draft = await showDialog<_TripDraft>(
       context: context,
-      builder: (_) => const _CreateTripDialog(),
+      builder: (_) => const _TripDialog(),
     );
     if (draft == null || !mounted) {
       return;
@@ -63,6 +131,9 @@ class _HomeScreenState extends State<HomeScreen> {
         ownerId: widget.user.uid,
         name: draft.name,
         description: draft.description,
+        location: draft.location,
+        startDate: draft.startDate,
+        endDate: draft.endDate,
       );
       if (mounted) {
         _showMessage('Trip created.');
@@ -78,8 +149,52 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  void _openTrip(Trip trip) {
-    Navigator.of(context).push(
+  Future<void> _sendVerification() async {
+    setState(() => _isSendingVerification = true);
+    try {
+      await widget.authService.sendEmailVerification();
+      if (mounted) {
+        _showMessage('Verification email sent. Check your inbox.');
+      }
+    } on FirebaseAuthException catch (error) {
+      if (mounted) {
+        _showMessage(
+          error.code == 'too-many-requests'
+              ? 'Please wait before requesting another verification email.'
+              : 'The verification email could not be sent.',
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _isSendingVerification = false);
+      }
+    }
+  }
+
+  Future<void> _refreshVerification() async {
+    setState(() => _isRefreshingVerification = true);
+    try {
+      final verified = await widget.authService.refreshEmailVerification();
+      if (mounted) {
+        _showMessage(
+          verified
+              ? 'Email verified. You can now receive shared adventures.'
+              : 'Email is not verified yet. Open the link in your inbox first.',
+        );
+      }
+    } on FirebaseAuthException catch (_) {
+      if (mounted) {
+        _showMessage('Verification status could not be refreshed.');
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _isRefreshingVerification = false);
+      }
+    }
+  }
+
+  Future<void> _openTrip(Trip trip) async {
+    await Navigator.of(context).push(
       MaterialPageRoute<void>(
         builder: (_) => TripDetailScreen(
           trip: trip,
@@ -88,6 +203,85 @@ class _HomeScreenState extends State<HomeScreen> {
         ),
       ),
     );
+    if (mounted) {
+      setState(() {});
+    }
+  }
+
+  Future<void> _editTrip(Trip trip) async {
+    final draft = await showDialog<_TripDraft>(
+      context: context,
+      builder: (_) => _TripDialog(trip: trip),
+    );
+    if (draft == null || !mounted) {
+      return;
+    }
+
+    setState(() => _busyTripIds.add(trip.id));
+    try {
+      await _repository.updateTrip(
+        tripId: trip.id,
+        name: draft.name,
+        description: draft.description,
+        location: draft.location,
+        startDate: draft.startDate,
+        endDate: draft.endDate,
+      );
+      if (mounted) {
+        _showMessage('Adventure updated.');
+      }
+    } on FirebaseException catch (error) {
+      debugPrint('Trip update failed (${error.code}): ${error.message}');
+      if (mounted) {
+        _showMessage('The adventure could not be updated.');
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _busyTripIds.remove(trip.id));
+      }
+    }
+  }
+
+  Future<void> _deleteTrip(Trip trip) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Delete this adventure?'),
+        content: Text(
+          '“${trip.name}” and all of its journal entries, photos, and shared access will be permanently deleted.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Delete adventure'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) {
+      return;
+    }
+
+    setState(() => _busyTripIds.add(trip.id));
+    try {
+      await _repository.deleteTrip(trip.id);
+      if (mounted) {
+        _showMessage('Adventure deleted.');
+      }
+    } on TripServiceException catch (error) {
+      debugPrint('Trip delete failed: ${error.message}');
+      if (mounted) {
+        _showMessage('The adventure could not be deleted safely.');
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _busyTripIds.remove(trip.id));
+      }
+    }
   }
 
   void _showMessage(String message) {
@@ -101,6 +295,16 @@ class _HomeScreenState extends State<HomeScreen> {
       appBar: AppBar(
         title: const Text('Your adventures'),
         actions: [
+          IconButton(
+            onPressed: _isDeletingAccount ? null : _openAccountSettings,
+            tooltip: 'Account settings',
+            icon: _isDeletingAccount
+                ? const SizedBox.square(
+                    dimension: 20,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Icon(Icons.account_circle_outlined),
+          ),
           IconButton(
             onPressed: _isSigningOut ? null : _signOut,
             tooltip: 'Sign out',
@@ -124,111 +328,411 @@ class _HomeScreenState extends State<HomeScreen> {
         label: const Text('New trip'),
       ),
       body: SafeArea(
-        child: StreamBuilder<List<Trip>>(
-          stream: _repository.watchOwnedTrips(widget.user.uid),
-          builder: (context, snapshot) {
-            if (snapshot.hasError) {
-              return _MessageState(
-                icon: Icons.cloud_off_outlined,
-                title: 'Trips are unavailable',
-                message: 'Check your connection and try again.',
-                actionLabel: 'Retry',
-                onAction: () => setState(() {}),
-              );
-            }
-
-            if (snapshot.connectionState == ConnectionState.waiting) {
-              return const Center(child: CircularProgressIndicator());
-            }
-
-            final trips = snapshot.data ?? const <Trip>[];
-            if (trips.isEmpty) {
-              return _MessageState(
-                icon: Icons.landscape_outlined,
-                title: 'Start your first adventure',
-                message: 'Create a private trip, then capture the moments you want to remember.',
-                actionLabel: 'Create a trip',
-                onAction: _isCreatingTrip ? null : _createTrip,
-              );
-            }
-
-            return ListView.separated(
-              padding: const EdgeInsets.fromLTRB(20, 16, 20, 104),
-              itemCount: trips.length,
-              separatorBuilder: (_, _) => const SizedBox(height: 12),
-              itemBuilder: (context, index) {
-                final trip = trips[index];
-                return Card(
-                  clipBehavior: Clip.antiAlias,
-                  child: InkWell(
-                    onTap: () => _openTrip(trip),
-                    child: Padding(
-                      padding: const EdgeInsets.all(20),
-                      child: Row(
-                        children: [
-                          const CircleAvatar(
-                            radius: 24,
-                            child: Icon(Icons.hiking),
-                          ),
-                          const SizedBox(width: 16),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  trip.name,
-                                  style: Theme.of(context).textTheme.titleLarge,
-                                ),
-                                if (trip.description.isNotEmpty) ...[
-                                  const SizedBox(height: 6),
-                                  Text(
-                                    trip.description,
-                                    maxLines: 2,
-                                    overflow: TextOverflow.ellipsis,
-                                  ),
-                                ],
-                              ],
-                            ),
-                          ),
-                          const Icon(Icons.chevron_right),
-                        ],
-                      ),
+        child: Column(
+          children: [
+            if (!widget.user.emailVerified)
+              MaterialBanner(
+                content: const Text(
+                  'Verify your email so other people can safely share adventures with you.',
+                ),
+                leading: const Icon(Icons.mark_email_unread_outlined),
+                actions: [
+                  TextButton(
+                    onPressed: _isRefreshingVerification
+                        ? null
+                        : _refreshVerification,
+                    child: Text(
+                      _isRefreshingVerification ? 'Checking…' : 'Check status',
                     ),
                   ),
-                );
-              },
-            );
-          },
+                  TextButton(
+                    onPressed: _isSendingVerification
+                        ? null
+                        : _sendVerification,
+                    child: Text(
+                      _isSendingVerification ? 'Sending…' : 'Send email',
+                    ),
+                  ),
+                ],
+              ),
+            Expanded(
+              child: StreamBuilder<List<Trip>>(
+                stream: _repository.watchAccessibleTrips(widget.user.uid),
+                builder: (context, snapshot) {
+                  if (snapshot.hasError) {
+                    return _MessageState(
+                      icon: Icons.cloud_off_outlined,
+                      title: 'Trips are unavailable',
+                      message: 'Check your connection and try again.',
+                      actionLabel: 'Retry',
+                      onAction: () => setState(() {}),
+                    );
+                  }
+
+                  if (snapshot.connectionState == ConnectionState.waiting) {
+                    return const Center(child: CircularProgressIndicator());
+                  }
+
+                  final trips = snapshot.data ?? const <Trip>[];
+                  if (trips.isEmpty) {
+                    return _MessageState(
+                      icon: Icons.landscape_outlined,
+                      title: 'Start your first adventure',
+                      message: 'Create a private trip, then capture the moments you want to remember.',
+                      actionLabel: 'Create a trip',
+                      onAction: _isCreatingTrip ? null : _createTrip,
+                    );
+                  }
+
+                  return ListView.separated(
+                    padding: const EdgeInsets.fromLTRB(20, 16, 20, 104),
+                    itemCount: trips.length,
+                    separatorBuilder: (_, _) => const SizedBox(height: 12),
+                    itemBuilder: (context, index) {
+                      final trip = trips[index];
+                      return Card(
+                        clipBehavior: Clip.antiAlias,
+                        child: Semantics(
+                          container: true,
+                          button: true,
+                          label: 'Open ${trip.name}',
+                          child: InkWell(
+                            onTap: _busyTripIds.contains(trip.id)
+                                ? null
+                                : () => _openTrip(trip),
+                            child: Padding(
+                              padding: const EdgeInsets.all(20),
+                              child: Row(
+                                children: [
+                                  const CircleAvatar(
+                                    radius: 24,
+                                    child: Icon(Icons.hiking),
+                                  ),
+                                  const SizedBox(width: 16),
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        Text(
+                                          trip.name,
+                                          style: Theme.of(context)
+                                              .textTheme
+                                              .titleLarge,
+                                        ),
+                                        if (trip.location.isNotEmpty ||
+                                            trip.startDate != null ||
+                                            trip.endDate != null) ...[
+                                          const SizedBox(height: 7),
+                                          Wrap(
+                                            spacing: 14,
+                                            runSpacing: 6,
+                                            children: [
+                                              if (trip.location.isNotEmpty)
+                                                _TripFact(
+                                                  icon: Icons.place_outlined,
+                                                  label: trip.location,
+                                                ),
+                                              if (trip.startDate != null ||
+                                                  trip.endDate != null)
+                                                _TripFact(
+                                                  icon: Icons
+                                                      .calendar_today_outlined,
+                                                  label: _formatTripDates(
+                                                    context,
+                                                    trip,
+                                                  ),
+                                                ),
+                                            ],
+                                          ),
+                                        ],
+                                        if (trip.description.isNotEmpty) ...[
+                                          const SizedBox(height: 6),
+                                          Text(
+                                            trip.description,
+                                            maxLines: 2,
+                                            overflow: TextOverflow.ellipsis,
+                                          ),
+                                        ],
+                                      ],
+                                    ),
+                                  ),
+                                  if (trip.accessRole != 'owner') ...[
+                                    const SizedBox(width: 12),
+                                    Chip(
+                                      avatar: Icon(
+                                        trip.accessRole == 'editor'
+                                            ? Icons.edit_outlined
+                                            : Icons.visibility_outlined,
+                                        size: 16,
+                                      ),
+                                      label: Text(
+                                        trip.accessRole == 'editor'
+                                            ? 'Editor'
+                                            : 'Shared',
+                                      ),
+                                    ),
+                                  ],
+                                  if (_busyTripIds.contains(trip.id))
+                                    const Padding(
+                                      padding: EdgeInsets.all(12),
+                                      child: SizedBox.square(
+                                        dimension: 18,
+                                        child: CircularProgressIndicator(
+                                          strokeWidth: 2,
+                                        ),
+                                      ),
+                                    )
+                                  else if (trip.accessRole == 'owner')
+                                    PopupMenuButton<_TripAction>(
+                                      tooltip: 'Adventure options',
+                                      onSelected: (action) {
+                                        switch (action) {
+                                          case _TripAction.edit:
+                                            _editTrip(trip);
+                                          case _TripAction.delete:
+                                            _deleteTrip(trip);
+                                        }
+                                      },
+                                      itemBuilder: (_) => const [
+                                        PopupMenuItem(
+                                          value: _TripAction.edit,
+                                          child: ListTile(
+                                            leading: Icon(Icons.edit_outlined),
+                                            title: Text('Edit adventure'),
+                                          ),
+                                        ),
+                                        PopupMenuItem(
+                                          value: _TripAction.delete,
+                                          child: ListTile(
+                                            leading: Icon(Icons.delete_outline),
+                                            title: Text('Delete adventure'),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  const Icon(Icons.chevron_right),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ),
+                      );
+                    },
+                  );
+                },
+              ),
+            ),
+          ],
         ),
       ),
     );
   }
 }
 
+enum _AccountAction { resetPassword, deleteAccount }
+
+class _AccountDialog extends StatelessWidget {
+  const _AccountDialog({required this.user});
+
+  final User user;
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Account settings'),
+      content: SizedBox(
+        width: 440,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            ListTile(
+              contentPadding: EdgeInsets.zero,
+              leading: const CircleAvatar(child: Icon(Icons.person_outline)),
+              title: SelectableText(user.email ?? 'TrekIt account'),
+              subtitle: Text(
+                user.emailVerified ? 'Email verified' : 'Email not verified',
+              ),
+            ),
+            const SizedBox(height: 12),
+            OutlinedButton.icon(
+              onPressed: () =>
+                  Navigator.of(context).pop(_AccountAction.resetPassword),
+              icon: const Icon(Icons.password_outlined),
+              label: const Text('Send password reset email'),
+            ),
+            const SizedBox(height: 12),
+            OutlinedButton.icon(
+              onPressed: () =>
+                  Navigator.of(context).pop(_AccountAction.deleteAccount),
+              icon: const Icon(Icons.delete_forever_outlined),
+              label: const Text('Delete account and private data'),
+              style: OutlinedButton.styleFrom(
+                foregroundColor: Theme.of(context).colorScheme.error,
+                side: BorderSide(color: Theme.of(context).colorScheme.error),
+              ),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Close'),
+        ),
+      ],
+    );
+  }
+}
+
+class _DeleteAccountDialog extends StatefulWidget {
+  const _DeleteAccountDialog();
+
+  @override
+  State<_DeleteAccountDialog> createState() => _DeleteAccountDialogState();
+}
+
+class _DeleteAccountDialogState extends State<_DeleteAccountDialog> {
+  final _confirmationController = TextEditingController();
+
+  bool get _isConfirmed =>
+      _confirmationController.text.trim().toUpperCase() == 'DELETE';
+
+  @override
+  void dispose() {
+    _confirmationController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Permanently delete your account?'),
+      content: SizedBox(
+        width: 460,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'This permanently removes your account, adventures you own, journal entries you wrote, uploaded photos, and access to shared adventures. This cannot be undone.',
+            ),
+            const SizedBox(height: 18),
+            const Text('Type DELETE to confirm.'),
+            const SizedBox(height: 8),
+            TextField(
+              controller: _confirmationController,
+              autofocus: true,
+              autocorrect: false,
+              enableSuggestions: false,
+              textCapitalization: TextCapitalization.characters,
+              decoration: const InputDecoration(labelText: 'Confirmation'),
+              onChanged: (_) => setState(() {}),
+            ),
+            const SizedBox(height: 12),
+            Text(
+              'For security, you may be asked to sign out and sign back in first.',
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(false),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          onPressed: _isConfirmed
+              ? () => Navigator.of(context).pop(true)
+              : null,
+          style: FilledButton.styleFrom(
+            backgroundColor: Theme.of(context).colorScheme.error,
+          ),
+          child: const Text('Delete account'),
+        ),
+      ],
+    );
+  }
+}
+
 class _TripDraft {
-  const _TripDraft({required this.name, required this.description});
+  const _TripDraft({
+    required this.name,
+    required this.description,
+    required this.location,
+    this.startDate,
+    this.endDate,
+  });
 
   final String name;
   final String description;
+  final String location;
+  final DateTime? startDate;
+  final DateTime? endDate;
 }
 
-class _CreateTripDialog extends StatefulWidget {
-  const _CreateTripDialog();
+enum _TripAction { edit, delete }
+
+class _TripDialog extends StatefulWidget {
+  const _TripDialog({this.trip});
+
+  final Trip? trip;
 
   @override
-  State<_CreateTripDialog> createState() => _CreateTripDialogState();
+  State<_TripDialog> createState() => _TripDialogState();
 }
 
-class _CreateTripDialogState extends State<_CreateTripDialog> {
+class _TripDialogState extends State<_TripDialog> {
   final _formKey = GlobalKey<FormState>();
-  final _nameController = TextEditingController();
-  final _descriptionController = TextEditingController();
+  late final _nameController = TextEditingController(text: widget.trip?.name);
+  late final _descriptionController = TextEditingController(
+    text: widget.trip?.description,
+  );
+  late final _locationController = TextEditingController(
+    text: widget.trip?.location,
+  );
+  late DateTime? _startDate = widget.trip?.startDate;
+  late DateTime? _endDate = widget.trip?.endDate;
 
   @override
   void dispose() {
     _nameController.dispose();
     _descriptionController.dispose();
+    _locationController.dispose();
     super.dispose();
+  }
+
+  Future<void> _pickStartDate() async {
+    final selected = await showDatePicker(
+      context: context,
+      initialDate: _startDate ?? DateTime.now(),
+      firstDate: DateTime(1900),
+      lastDate: DateTime(2100),
+      helpText: 'Choose a start date',
+    );
+    if (selected != null && mounted) {
+      setState(() {
+        _startDate = selected;
+        if (_endDate != null && _endDate!.isBefore(selected)) {
+          _endDate = selected;
+        }
+      });
+    }
+  }
+
+  Future<void> _pickEndDate() async {
+    final selected = await showDatePicker(
+      context: context,
+      initialDate: _endDate ?? _startDate ?? DateTime.now(),
+      firstDate: _startDate ?? DateTime(1900),
+      lastDate: DateTime(2100),
+      helpText: 'Choose an end date',
+    );
+    if (selected != null && mounted) {
+      setState(() => _endDate = selected);
+    }
   }
 
   void _submit() {
@@ -239,6 +743,9 @@ class _CreateTripDialogState extends State<_CreateTripDialog> {
       _TripDraft(
         name: _nameController.text.trim(),
         description: _descriptionController.text.trim(),
+        location: _locationController.text.trim(),
+        startDate: _startDate,
+        endDate: _endDate,
       ),
     );
   }
@@ -246,34 +753,92 @@ class _CreateTripDialogState extends State<_CreateTripDialog> {
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
-      title: const Text('Create a trip'),
-      content: Form(
-        key: _formKey,
-        child: SizedBox(
-          width: 420,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              TextFormField(
-                controller: _nameController,
-                autofocus: true,
-                textInputAction: TextInputAction.next,
-                maxLength: 100,
-                decoration: const InputDecoration(labelText: 'Trip name'),
-                validator: (value) => (value?.trim().isEmpty ?? true)
-                    ? 'Enter a trip name.'
-                    : null,
-              ),
-              const SizedBox(height: 12),
-              TextFormField(
-                controller: _descriptionController,
-                maxLength: 1000,
-                maxLines: 3,
-                decoration: const InputDecoration(
-                  labelText: 'Description (optional)',
+      title: Text(widget.trip == null ? 'Create a trip' : 'Edit adventure'),
+      content: SingleChildScrollView(
+        child: Form(
+          key: _formKey,
+          child: SizedBox(
+            width: 420,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextFormField(
+                  controller: _nameController,
+                  autofocus: true,
+                  textInputAction: TextInputAction.next,
+                  maxLength: 100,
+                  decoration: const InputDecoration(labelText: 'Trip name'),
+                  validator: (value) => (value?.trim().isEmpty ?? true)
+                      ? 'Enter a trip name.'
+                      : null,
                 ),
-              ),
-            ],
+                const SizedBox(height: 12),
+                TextFormField(
+                  controller: _descriptionController,
+                  maxLength: 1000,
+                  maxLines: 3,
+                  decoration: const InputDecoration(
+                    labelText: 'Description (optional)',
+                  ),
+                ),
+                const SizedBox(height: 12),
+                TextFormField(
+                  controller: _locationController,
+                  maxLength: 160,
+                  textInputAction: TextInputAction.done,
+                  decoration: const InputDecoration(
+                    labelText: 'Location (optional)',
+                    prefixIcon: Icon(Icons.place_outlined),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Row(
+                  children: [
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        onPressed: _pickStartDate,
+                        icon: const Icon(Icons.calendar_today_outlined),
+                        label: Text(
+                          _startDate == null
+                              ? 'Start date'
+                              : MaterialLocalizations.of(context)
+                                    .formatMediumDate(_startDate!),
+                        ),
+                      ),
+                    ),
+                    if (_startDate != null)
+                      IconButton(
+                        onPressed: () => setState(() => _startDate = null),
+                        tooltip: 'Clear start date',
+                        icon: const Icon(Icons.close),
+                      ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                Row(
+                  children: [
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        onPressed: _pickEndDate,
+                        icon: const Icon(Icons.event_available_outlined),
+                        label: Text(
+                          _endDate == null
+                              ? 'End date'
+                              : MaterialLocalizations.of(context)
+                                    .formatMediumDate(_endDate!),
+                        ),
+                      ),
+                    ),
+                    if (_endDate != null)
+                      IconButton(
+                        onPressed: () => setState(() => _endDate = null),
+                        tooltip: 'Clear end date',
+                        icon: const Icon(Icons.close),
+                      ),
+                  ],
+                ),
+              ],
+            ),
           ),
         ),
       ),
@@ -282,10 +847,44 @@ class _CreateTripDialogState extends State<_CreateTripDialog> {
           onPressed: () => Navigator.of(context).pop(),
           child: const Text('Cancel'),
         ),
-        FilledButton(onPressed: _submit, child: const Text('Create')),
+        FilledButton(
+          onPressed: _submit,
+          child: Text(widget.trip == null ? 'Create' : 'Save changes'),
+        ),
       ],
     );
   }
+}
+
+class _TripFact extends StatelessWidget {
+  const _TripFact({required this.icon, required this.label});
+
+  final IconData icon;
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(icon, size: 15),
+        const SizedBox(width: 5),
+        Flexible(
+          child: Text(label, style: Theme.of(context).textTheme.bodySmall),
+        ),
+      ],
+    );
+  }
+}
+
+String _formatTripDates(BuildContext context, Trip trip) {
+  final localizations = MaterialLocalizations.of(context);
+  final start = trip.startDate;
+  final end = trip.endDate;
+  if (start != null && end != null) {
+    return '${localizations.formatMediumDate(start)} – ${localizations.formatMediumDate(end)}';
+  }
+  return localizations.formatMediumDate(start ?? end!);
 }
 
 class _MessageState extends StatelessWidget {
