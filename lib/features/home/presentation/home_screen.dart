@@ -44,6 +44,7 @@ class _HomeScreenState extends State<HomeScreen> {
   bool _isSendingVerification = false;
   bool _isRefreshingVerification = false;
   bool _isDeletingAccount = false;
+  int _feedRevision = 0;
 
   @override
   void initState() {
@@ -230,7 +231,11 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  Future<void> _openTrip(Trip trip, {bool startWithNewEntry = false}) async {
+  Future<void> _openTrip(
+    Trip trip, {
+    bool startWithNewEntry = false,
+    bool startEntryWithPhoto = false,
+  }) async {
     await Navigator.of(context).push(
       MaterialPageRoute<void>(
         builder: (_) => TripDetailScreen(
@@ -238,6 +243,7 @@ class _HomeScreenState extends State<HomeScreen> {
           userId: widget.user.uid,
           repository: _repository,
           startWithNewEntry: startWithNewEntry,
+          startEntryWithPhoto: startEntryWithPhoto,
         ),
       ),
     );
@@ -250,42 +256,13 @@ class _HomeScreenState extends State<HomeScreen> {
     final action = await showModalBottomSheet<_CreateAction>(
       context: context,
       showDragHandle: true,
-      builder: (context) => SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Text('Create', style: Theme.of(context).textTheme.headlineSmall),
-              const SizedBox(height: 12),
-              ListTile(
-                leading: const CircleAvatar(
-                  child: Icon(Icons.landscape_outlined),
-                ),
-                title: const Text('New adventure'),
-                subtitle: const Text('Plan a trip and invite trusted people.'),
-                onTap: () => Navigator.of(context).pop(_CreateAction.adventure),
-              ),
-              ListTile(
-                enabled: _latestTrips.any(
-                  (trip) =>
-                      trip.accessRole == 'owner' || trip.accessRole == 'editor',
-                ),
-                leading: const CircleAvatar(
-                  child: Icon(Icons.edit_note_outlined),
-                ),
-                title: const Text('New journal entry'),
-                subtitle: Text(
-                  _latestTrips.isEmpty
-                      ? 'Create an adventure first.'
-                      : 'Add a memory to one of your adventures.',
-                ),
-                onTap: () => Navigator.of(context).pop(_CreateAction.entry),
-              ),
-            ],
-          ),
-        ),
+      builder: (context) => CreateMenuSheet(
+        canAddContent: _editableTrips.isNotEmpty,
+        onCreateAdventure: () =>
+            Navigator.of(context).pop(_CreateAction.adventure),
+        onCreateEntry: () => Navigator.of(context).pop(_CreateAction.entry),
+        onAddPhoto: () => Navigator.of(context).pop(_CreateAction.photo),
+        onCreateSnippet: () => Navigator.of(context).pop(_CreateAction.snippet),
       ),
     );
     if (!mounted || action == null) {
@@ -296,15 +273,21 @@ class _HomeScreenState extends State<HomeScreen> {
         await _createTrip();
       case _CreateAction.entry:
         await _chooseAdventureForEntry();
+      case _CreateAction.photo:
+        await _chooseAdventureForEntry(startWithPhoto: true);
+      case _CreateAction.snippet:
+        await _createQuickSnippet();
     }
   }
 
-  Future<void> _chooseAdventureForEntry() async {
-    final editableTrips = _latestTrips
-        .where(
-          (trip) => trip.accessRole == 'owner' || trip.accessRole == 'editor',
-        )
-        .toList(growable: false);
+  List<Trip> get _editableTrips => _latestTrips
+      .where(
+        (trip) => trip.accessRole == 'owner' || trip.accessRole == 'editor',
+      )
+      .toList(growable: false);
+
+  Future<void> _chooseAdventureForEntry({bool startWithPhoto = false}) async {
+    final editableTrips = _editableTrips;
     if (editableTrips.isEmpty) {
       _showMessage('Create an adventure before adding a journal entry.');
       return;
@@ -349,7 +332,60 @@ class _HomeScreenState extends State<HomeScreen> {
       ),
     );
     if (trip != null && mounted) {
-      await _openTrip(trip, startWithNewEntry: true);
+      await _openTrip(
+        trip,
+        startWithNewEntry: true,
+        startEntryWithPhoto: startWithPhoto,
+      );
+    }
+  }
+
+  Future<void> _createQuickSnippet() async {
+    final editableTrips = _editableTrips;
+    if (editableTrips.isEmpty) {
+      _showMessage('Create an adventure before adding a Quick Snippet.');
+      return;
+    }
+    final draft = await showDialog<_QuickSnippetDraft>(
+      context: context,
+      builder: (_) => _QuickSnippetDialog(trips: editableTrips),
+    );
+    if (draft == null || !mounted) return;
+
+    final snippet = QueuedSnippet.create(
+      tripId: draft.trip.id,
+      tripName: draft.trip.name,
+      text: draft.text,
+      location: draft.location,
+    );
+    final queue = QuickSnippetQueue();
+    var message = 'Quick Snippet posted.';
+    if (draft.saveLocally) {
+      await queue.enqueue(widget.user.uid, snippet);
+      message = 'Saved locally. It is waiting to be posted.';
+    } else {
+      try {
+        await _repository
+            .createSnippet(
+              tripId: snippet.tripId,
+              snippetId: snippet.id,
+              authorId: widget.user.uid,
+              text: snippet.text,
+              location: snippet.location,
+              capturedAt: snippet.capturedAt,
+            )
+            .timeout(const Duration(seconds: 10));
+      } catch (_) {
+        await queue.enqueue(widget.user.uid, snippet);
+        message = 'Could not post now, so it was saved locally for retry.';
+      }
+    }
+    if (mounted) {
+      setState(() {
+        _selectedIndex = 0;
+        _feedRevision++;
+      });
+      _showMessage(message);
     }
   }
 
@@ -772,6 +808,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
           return switch (_selectedIndex) {
             0 => _FeedPage(
+              key: ValueKey('feed-$_feedRevision'),
               repository: _repository,
               userId: widget.user.uid,
               trips: trips,
@@ -862,10 +899,202 @@ class TrekItNavigationBar extends StatelessWidget {
   }
 }
 
-enum _CreateAction { adventure, entry }
+enum _CreateAction { adventure, entry, photo, snippet }
+
+class CreateMenuSheet extends StatelessWidget {
+  const CreateMenuSheet({
+    super.key,
+    required this.canAddContent,
+    required this.onCreateAdventure,
+    required this.onCreateEntry,
+    required this.onAddPhoto,
+    required this.onCreateSnippet,
+  });
+
+  final bool canAddContent;
+  final VoidCallback onCreateAdventure;
+  final VoidCallback onCreateEntry;
+  final VoidCallback onAddPhoto;
+  final VoidCallback onCreateSnippet;
+
+  @override
+  Widget build(BuildContext context) {
+    return SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
+        child: ListView(
+          shrinkWrap: true,
+          children: [
+            Text('Create', style: Theme.of(context).textTheme.headlineSmall),
+            const SizedBox(height: 8),
+            ListTile(
+              leading: const CircleAvatar(
+                child: Icon(Icons.landscape_outlined),
+              ),
+              title: const Text('New adventure'),
+              subtitle: const Text('Plan a trip and invite trusted people.'),
+              onTap: onCreateAdventure,
+            ),
+            ListTile(
+              enabled: canAddContent,
+              leading: const CircleAvatar(
+                child: Icon(Icons.edit_note_outlined),
+              ),
+              title: const Text('New journal entry'),
+              subtitle: Text(
+                canAddContent
+                    ? 'Add a memory to one of your adventures.'
+                    : 'Create an adventure first.',
+              ),
+              onTap: onCreateEntry,
+            ),
+            ListTile(
+              enabled: canAddContent,
+              leading: const CircleAvatar(
+                child: Icon(Icons.add_photo_alternate_outlined),
+              ),
+              title: const Text('Add a photo'),
+              subtitle: const Text('Start a photo memory in an adventure.'),
+              onTap: onAddPhoto,
+            ),
+            ListTile(
+              enabled: canAddContent,
+              leading: const CircleAvatar(child: Icon(Icons.bolt_outlined)),
+              title: const Text('Quick Snippet'),
+              subtitle: const Text(
+                'Capture a short moment now or save it locally.',
+              ),
+              onTap: onCreateSnippet,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _QuickSnippetDraft {
+  const _QuickSnippetDraft({
+    required this.trip,
+    required this.text,
+    required this.location,
+    required this.saveLocally,
+  });
+
+  final Trip trip;
+  final String text;
+  final String location;
+  final bool saveLocally;
+}
+
+class _QuickSnippetDialog extends StatefulWidget {
+  const _QuickSnippetDialog({required this.trips});
+
+  final List<Trip> trips;
+
+  @override
+  State<_QuickSnippetDialog> createState() => _QuickSnippetDialogState();
+}
+
+class _QuickSnippetDialogState extends State<_QuickSnippetDialog> {
+  final _formKey = GlobalKey<FormState>();
+  final _textController = TextEditingController();
+  final _locationController = TextEditingController();
+  late String _tripId = widget.trips.first.id;
+
+  @override
+  void dispose() {
+    _textController.dispose();
+    _locationController.dispose();
+    super.dispose();
+  }
+
+  void _submit({required bool saveLocally}) {
+    if (!(_formKey.currentState?.validate() ?? false)) return;
+    final trip = widget.trips.firstWhere((item) => item.id == _tripId);
+    Navigator.of(context).pop(
+      _QuickSnippetDraft(
+        trip: trip,
+        text: _textController.text.trim(),
+        location: _locationController.text.trim(),
+        saveLocally: saveLocally,
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Quick Snippet'),
+      content: SingleChildScrollView(
+        child: Form(
+          key: _formKey,
+          child: SizedBox(
+            width: 480,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextFormField(
+                  controller: _textController,
+                  autofocus: true,
+                  maxLength: 1000,
+                  minLines: 3,
+                  maxLines: 6,
+                  decoration: const InputDecoration(
+                    labelText: 'What happened?',
+                    alignLabelWithHint: true,
+                  ),
+                  validator: (value) => (value?.trim().isEmpty ?? true)
+                      ? 'Add a quick note first.'
+                      : null,
+                ),
+                const SizedBox(height: 10),
+                TextFormField(
+                  controller: _locationController,
+                  maxLength: 160,
+                  decoration: const InputDecoration(
+                    labelText: 'Location (optional)',
+                    prefixIcon: Icon(Icons.place_outlined),
+                  ),
+                ),
+                const SizedBox(height: 10),
+                DropdownButtonFormField<String>(
+                  initialValue: _tripId,
+                  decoration: const InputDecoration(labelText: 'Adventure'),
+                  items: [
+                    for (final trip in widget.trips)
+                      DropdownMenuItem(value: trip.id, child: Text(trip.name)),
+                  ],
+                  onChanged: (value) {
+                    if (value != null) setState(() => _tripId = value);
+                  },
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Cancel'),
+        ),
+        OutlinedButton(
+          onPressed: () => _submit(saveLocally: true),
+          child: const Text('Save locally'),
+        ),
+        FilledButton(
+          onPressed: () => _submit(saveLocally: false),
+          child: const Text('Post'),
+        ),
+      ],
+    );
+  }
+}
 
 class _FeedPage extends StatefulWidget {
   const _FeedPage({
+    super.key,
     required this.repository,
     required this.userId,
     required this.trips,

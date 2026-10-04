@@ -31,4 +31,39 @@ void main() {
     await tester.tap(find.text('Create'));
     expect(selectedIndex, 2);
   });
+
+  testWidgets('Create menu exposes every destination-aware action on mobile', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    var selectedAction = '';
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: CreateMenuSheet(
+            canAddContent: true,
+            onCreateAdventure: () => selectedAction = 'adventure',
+            onCreateEntry: () => selectedAction = 'entry',
+            onAddPhoto: () => selectedAction = 'photo',
+            onCreateSnippet: () => selectedAction = 'snippet',
+          ),
+        ),
+      ),
+    );
+
+    expect(find.text('New adventure'), findsOneWidget);
+    expect(find.text('New journal entry'), findsOneWidget);
+    expect(find.text('Add a photo'), findsOneWidget);
+    expect(find.text('Quick Snippet'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+
+    await tester.tap(find.text('Add a photo'));
+    expect(selectedAction, 'photo');
+    await tester.tap(find.text('Quick Snippet'));
+    expect(selectedAction, 'snippet');
+  });
 }

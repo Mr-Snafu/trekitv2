@@ -17,7 +17,7 @@ This document is the source of truth for TrekIt V2 development. TrekIt is a priv
 | --- | --- | --- |
 | Feed | Private, newest-first activity from accessible adventures | Live with adventure, journal-entry, photo, comment, sharing, and Quick Snippet activity plus a local retry queue |
 | Adventures | Organize owned and shared trips and open their journals | Live with lifecycle groups, cover images, search, filters, sorting, editing, deletion, sharing, entries, and photos |
-| Create | Start an adventure or add a journal entry from anywhere | Initial creation menu is live |
+| Create | Start an adventure or capture content from anywhere | Live with adventure, journal-entry, photo-first memory, and Quick Snippet flows |
 | Circle | Manage trusted connections, requests, blocking, and TrekIt IDs | Live with private IDs, requests, cooldowns, remove, block, and unblock controls |
 | Profile | Identity, verification, settings, privacy, export, and account controls | Live with editable identity, saved preferences, JSON export, help/legal summaries, and account controls |
 
@@ -39,8 +39,8 @@ This document is the source of truth for TrekIt V2 development. TrekIt is a priv
 
 ### Create
 
-- Offer context-aware creation for adventures, journal entries, photos, and quick snippets.
-- Allow a user to choose the destination adventure without navigating away first.
+- Offer context-aware creation for adventures, journal entries, photos, and quick snippets. *(Live)*
+- Allow a user to choose the destination adventure without navigating away first. *(Live)*
 - Preserve unsent work when connectivity is interrupted.
 
 ### Circle
@@ -65,5 +65,6 @@ This document is the source of truth for TrekIt V2 development. TrekIt is a priv
 4. Build the Circle relationship and invitation model. (Live)
 5. Expand Profile, notifications, privacy controls, and data export. (Live)
 6. Add comments and richer feed events. *(Live)*
+7. Expand the central Create hub with destination-aware photo and Quick Snippet flows. *(Live)*
 
 Every phase should be checked against this blueprint, tested at mobile width, deployed through a preview, verified against the live build, and backed up to GitHub.

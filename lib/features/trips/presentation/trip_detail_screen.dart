@@ -17,12 +17,14 @@ class TripDetailScreen extends StatefulWidget {
     required this.userId,
     required this.repository,
     this.startWithNewEntry = false,
+    this.startEntryWithPhoto = false,
   });
 
   final Trip trip;
   final String userId;
   final TripRepository repository;
   final bool startWithNewEntry;
+  final bool startEntryWithPhoto;
 
   @override
   State<TripDetailScreen> createState() => _TripDetailScreenState();
@@ -40,7 +42,9 @@ class _TripDetailScreenState extends State<TripDetailScreen> {
   void initState() {
     super.initState();
     if (widget.startWithNewEntry && _canCreateEntry) {
-      WidgetsBinding.instance.addPostFrameCallback((_) => _createEntry());
+      WidgetsBinding.instance.addPostFrameCallback(
+        (_) => _createEntry(pickPhotoFirst: widget.startEntryWithPhoto),
+      );
     }
   }
 
@@ -52,10 +56,10 @@ class _TripDetailScreenState extends State<TripDetailScreen> {
     );
   }
 
-  Future<void> _createEntry() async {
+  Future<void> _createEntry({bool pickPhotoFirst = false}) async {
     final draft = await showDialog<_EntryDraft>(
       context: context,
-      builder: (_) => const _CreateEntryDialog(),
+      builder: (_) => _CreateEntryDialog(pickPhotoOnOpen: pickPhotoFirst),
     );
     if (draft == null || !mounted) {
       return;
@@ -821,7 +825,9 @@ class _EntryDraft {
 }
 
 class _CreateEntryDialog extends StatefulWidget {
-  const _CreateEntryDialog();
+  const _CreateEntryDialog({this.pickPhotoOnOpen = false});
+
+  final bool pickPhotoOnOpen;
 
   @override
   State<_CreateEntryDialog> createState() => _CreateEntryDialogState();
@@ -836,6 +842,14 @@ class _CreateEntryDialogState extends State<_CreateEntryDialog> {
   String? _imageContentType;
   bool _isPickingImage = false;
   DateTime _memoryDate = DateUtils.dateOnly(DateTime.now());
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.pickPhotoOnOpen) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _pickImage());
+    }
+  }
 
   Future<void> _pickMemoryDate() async {
     final selectedDate = await showDatePicker(
@@ -943,7 +957,7 @@ class _CreateEntryDialogState extends State<_CreateEntryDialog> {
               children: [
                 TextFormField(
                   controller: _titleController,
-                  autofocus: true,
+                  autofocus: !widget.pickPhotoOnOpen,
                   maxLength: 120,
                   textInputAction: TextInputAction.next,
                   decoration: const InputDecoration(labelText: 'Title'),
