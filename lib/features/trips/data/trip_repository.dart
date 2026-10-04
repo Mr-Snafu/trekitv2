@@ -152,6 +152,10 @@ class TripRepository {
     String? imageContentType,
     void Function(double progress)? onUploadProgress,
   }) async {
+    if (isFutureMemoryDate(memoryDate)) {
+      throw ArgumentError('The memory date cannot be in the future.');
+    }
+
     final entry = _trips.doc(tripId).collection('entries').doc();
     final now = Timestamp.now();
     Reference? imageReference;
@@ -181,7 +185,7 @@ class TripRepository {
     final data = <String, dynamic>{
       'title': title.trim(),
       'body': body.trim(),
-      'memoryDate': Timestamp.fromDate(memoryDate),
+      'memoryDate': Timestamp.fromDate(normalizeMemoryDate(memoryDate)),
       'authorId': authorId,
       'createdAt': now,
       'updatedAt': now,
@@ -329,10 +333,14 @@ class TripRepository {
     required String body,
     required DateTime memoryDate,
   }) {
+    if (isFutureMemoryDate(memoryDate)) {
+      throw ArgumentError('The memory date cannot be in the future.');
+    }
+
     return _trips.doc(tripId).collection('entries').doc(entryId).update({
       'title': title.trim(),
       'body': body.trim(),
-      'memoryDate': Timestamp.fromDate(memoryDate),
+      'memoryDate': Timestamp.fromDate(normalizeMemoryDate(memoryDate)),
       'updatedAt': Timestamp.now(),
     });
   }

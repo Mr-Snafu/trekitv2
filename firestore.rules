@@ -31,7 +31,7 @@ service cloud.firestore {
     //   body: string (required, 1-10000)
     //   authorId: string (required, immutable, <= 128)
     //   imagePath: string (optional, immutable uploader-scoped Storage path)
-    //   memoryDate: timestamp (optional for legacy entries)
+    //   memoryDate: timestamp (optional for legacy entries, never future-dated)
     //   createdAt: timestamp (required, immutable)
     //   updatedAt: timestamp (required)
     // ===============================================================
@@ -153,7 +153,8 @@ service cloud.firestore {
         data.body.size() <= 10000 &&
         isValidId(data.authorId) &&
         isValidEntryImagePath(data, tripId, entryId) &&
-        (!('memoryDate' in data) || data.memoryDate is timestamp) &&
+        (!('memoryDate' in data) ||
+          (data.memoryDate is timestamp && data.memoryDate <= request.time)) &&
         data.createdAt is timestamp &&
         data.updatedAt is timestamp;
     }

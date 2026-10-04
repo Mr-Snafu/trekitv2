@@ -494,7 +494,7 @@ class _CreateEntryDialogState extends State<_CreateEntryDialog> {
       context: context,
       initialDate: _memoryDate,
       firstDate: DateTime(1900),
-      lastDate: DateTime(2100),
+      lastDate: DateUtils.dateOnly(DateTime.now()),
       helpText: 'When did this happen?',
     );
     if (selectedDate != null && mounted) {
@@ -695,14 +695,16 @@ class _EditEntryDialogState extends State<_EditEntryDialog> {
   late final TextEditingController _bodyController = TextEditingController(
     text: widget.entry.body,
   );
-  late DateTime _memoryDate = DateUtils.dateOnly(widget.entry.timelineDate);
+  late DateTime _memoryDate = isFutureMemoryDate(widget.entry.timelineDate)
+      ? DateUtils.dateOnly(DateTime.now())
+      : DateUtils.dateOnly(widget.entry.timelineDate);
 
   Future<void> _pickMemoryDate() async {
     final selectedDate = await showDatePicker(
       context: context,
       initialDate: _memoryDate,
       firstDate: DateTime(1900),
-      lastDate: DateTime(2100),
+      lastDate: DateUtils.dateOnly(DateTime.now()),
       helpText: 'When did this happen?',
     );
     if (selectedDate != null && mounted) {

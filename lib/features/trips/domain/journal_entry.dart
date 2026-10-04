@@ -1,5 +1,16 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 
+DateTime normalizeMemoryDate(DateTime value) {
+  return DateTime(value.year, value.month, value.day);
+}
+
+bool isFutureMemoryDate(DateTime value, {DateTime? comparedTo}) {
+  final reference = comparedTo ?? DateTime.now();
+  final valueDate = normalizeMemoryDate(value);
+  final referenceDate = normalizeMemoryDate(reference);
+  return valueDate.isAfter(referenceDate);
+}
+
 class JournalEntry {
   const JournalEntry({
     required this.id,

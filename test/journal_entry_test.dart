@@ -34,4 +34,39 @@ void main() {
       expect(entry.timelineDate, createdAt);
     });
   });
+
+  group('isFutureMemoryDate', () {
+    final todayAtNoon = DateTime(2026, 10, 3, 12);
+
+    test('allows a past date', () {
+      expect(
+        isFutureMemoryDate(DateTime(2026, 10, 2), comparedTo: todayAtNoon),
+        isFalse,
+      );
+    });
+
+    test('allows today regardless of the time', () {
+      expect(
+        isFutureMemoryDate(
+          DateTime(2026, 10, 3, 23, 59),
+          comparedTo: todayAtNoon,
+        ),
+        isFalse,
+      );
+    });
+
+    test('rejects a future calendar date', () {
+      expect(
+        isFutureMemoryDate(DateTime(2026, 10, 4), comparedTo: todayAtNoon),
+        isTrue,
+      );
+    });
+  });
+
+  test('normalizeMemoryDate removes the time of day', () {
+    expect(
+      normalizeMemoryDate(DateTime(2026, 10, 3, 23, 59, 58)),
+      DateTime(2026, 10, 3),
+    );
+  });
 }
