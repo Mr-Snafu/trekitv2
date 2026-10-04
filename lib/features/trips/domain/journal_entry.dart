@@ -8,6 +8,7 @@ class JournalEntry {
     required this.authorId,
     required this.createdAt,
     required this.updatedAt,
+    this.memoryDate,
     this.imagePath,
   });
 
@@ -17,7 +18,10 @@ class JournalEntry {
   final String authorId;
   final DateTime createdAt;
   final DateTime updatedAt;
+  final DateTime? memoryDate;
   final String? imagePath;
+
+  DateTime get timelineDate => memoryDate ?? createdAt;
 
   factory JournalEntry.fromFirestore(
     DocumentSnapshot<Map<String, dynamic>> snapshot,
@@ -30,11 +34,16 @@ class JournalEntry {
       authorId: data['authorId'] as String? ?? '',
       createdAt: _dateFrom(data['createdAt']),
       updatedAt: _dateFrom(data['updatedAt']),
+      memoryDate: _optionalDateFrom(data['memoryDate']),
       imagePath: data['imagePath'] as String?,
     );
   }
 
   static DateTime _dateFrom(Object? value) {
     return value is Timestamp ? value.toDate() : DateTime.now();
+  }
+
+  static DateTime? _optionalDateFrom(Object? value) {
+    return value is Timestamp ? value.toDate() : null;
   }
 }

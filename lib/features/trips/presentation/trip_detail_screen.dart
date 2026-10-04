@@ -57,6 +57,7 @@ class _TripDetailScreenState extends State<TripDetailScreen> {
         authorId: widget.userId,
         title: draft.title,
         body: draft.body,
+        memoryDate: draft.memoryDate,
         imageBytes: draft.imageBytes,
         imageContentType: draft.imageContentType,
         onUploadProgress: (progress) {
@@ -118,6 +119,7 @@ class _TripDetailScreenState extends State<TripDetailScreen> {
         entryId: entry.id,
         title: draft.title,
         body: draft.body,
+        memoryDate: draft.memoryDate,
       );
       if (mounted) {
         _showMessage('Journal entry updated.');
@@ -281,6 +283,8 @@ class _TripDetailScreenState extends State<TripDetailScreen> {
                                   tripId: widget.trip.id,
                                   entryId: entry.id,
                                   imagePath: imagePath,
+                                  title: entry.title,
+                                  memoryDate: entry.timelineDate,
                                 ),
                                 const SizedBox(height: 16),
                               ],
@@ -341,10 +345,21 @@ class _TripDetailScreenState extends State<TripDetailScreen> {
                               const SizedBox(height: 10),
                               Text(entry.body),
                               const SizedBox(height: 14),
-                              Text(
-                                MaterialLocalizations.of(context)
-                                    .formatShortDate(entry.createdAt),
-                                style: Theme.of(context).textTheme.bodySmall,
+                              Row(
+                                children: [
+                                  const Icon(
+                                    Icons.calendar_today_outlined,
+                                    size: 16,
+                                  ),
+                                  const SizedBox(width: 6),
+                                  Text(
+                                    MaterialLocalizations.of(context)
+                                        .formatMediumDate(entry.timelineDate),
+                                    style: Theme.of(context)
+                                        .textTheme
+                                        .bodySmall,
+                                  ),
+                                ],
                               ),
                             ],
                           ),
@@ -430,22 +445,29 @@ class _OverviewRow extends StatelessWidget {
 }
 
 class _EntryTextDraft {
-  const _EntryTextDraft({required this.title, required this.body});
+  const _EntryTextDraft({
+    required this.title,
+    required this.body,
+    required this.memoryDate,
+  });
 
   final String title;
   final String body;
+  final DateTime memoryDate;
 }
 
 class _EntryDraft {
   const _EntryDraft({
     required this.title,
     required this.body,
+    required this.memoryDate,
     this.imageBytes,
     this.imageContentType,
   });
 
   final String title;
   final String body;
+  final DateTime memoryDate;
   final Uint8List? imageBytes;
   final String? imageContentType;
 }
@@ -465,6 +487,20 @@ class _CreateEntryDialogState extends State<_CreateEntryDialog> {
   Uint8List? _imageBytes;
   String? _imageContentType;
   bool _isPickingImage = false;
+  DateTime _memoryDate = DateUtils.dateOnly(DateTime.now());
+
+  Future<void> _pickMemoryDate() async {
+    final selectedDate = await showDatePicker(
+      context: context,
+      initialDate: _memoryDate,
+      firstDate: DateTime(1900),
+      lastDate: DateTime(2100),
+      helpText: 'When did this happen?',
+    );
+    if (selectedDate != null && mounted) {
+      setState(() => _memoryDate = DateUtils.dateOnly(selectedDate));
+    }
+  }
 
   Future<void> _pickImage() async {
     setState(() => _isPickingImage = true);
@@ -538,6 +574,7 @@ class _CreateEntryDialogState extends State<_CreateEntryDialog> {
       _EntryDraft(
         title: _titleController.text.trim(),
         body: _bodyController.text.trim(),
+        memoryDate: _memoryDate,
         imageBytes: _imageBytes,
         imageContentType: _imageContentType,
       ),
@@ -575,6 +612,17 @@ class _CreateEntryDialogState extends State<_CreateEntryDialog> {
                   validator: (value) => (value?.trim().isEmpty ?? true)
                       ? 'Write something about this moment.'
                       : null,
+                ),
+                const SizedBox(height: 12),
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: OutlinedButton.icon(
+                    onPressed: _pickMemoryDate,
+                    icon: const Icon(Icons.calendar_today_outlined),
+                    label: Text(
+                      'Memory date: ${MaterialLocalizations.of(context).formatMediumDate(_memoryDate)}',
+                    ),
+                  ),
                 ),
                 const SizedBox(height: 12),
                 if (_imageBytes case final imageBytes?) ...[
@@ -647,6 +695,20 @@ class _EditEntryDialogState extends State<_EditEntryDialog> {
   late final TextEditingController _bodyController = TextEditingController(
     text: widget.entry.body,
   );
+  late DateTime _memoryDate = DateUtils.dateOnly(widget.entry.timelineDate);
+
+  Future<void> _pickMemoryDate() async {
+    final selectedDate = await showDatePicker(
+      context: context,
+      initialDate: _memoryDate,
+      firstDate: DateTime(1900),
+      lastDate: DateTime(2100),
+      helpText: 'When did this happen?',
+    );
+    if (selectedDate != null && mounted) {
+      setState(() => _memoryDate = DateUtils.dateOnly(selectedDate));
+    }
+  }
 
   @override
   void dispose() {
@@ -663,6 +725,7 @@ class _EditEntryDialogState extends State<_EditEntryDialog> {
       _EntryTextDraft(
         title: _titleController.text.trim(),
         body: _bodyController.text.trim(),
+        memoryDate: _memoryDate,
       ),
     );
   }
@@ -698,6 +761,17 @@ class _EditEntryDialogState extends State<_EditEntryDialog> {
                   validator: (value) => (value?.trim().isEmpty ?? true)
                       ? 'Write something about this moment.'
                       : null,
+                ),
+                const SizedBox(height: 12),
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: OutlinedButton.icon(
+                    onPressed: _pickMemoryDate,
+                    icon: const Icon(Icons.calendar_today_outlined),
+                    label: Text(
+                      'Memory date: ${MaterialLocalizations.of(context).formatMediumDate(_memoryDate)}',
+                    ),
+                  ),
                 ),
               ],
             ),
@@ -943,12 +1017,16 @@ class _EntryPhoto extends StatefulWidget {
     required this.tripId,
     required this.entryId,
     required this.imagePath,
+    required this.title,
+    required this.memoryDate,
   });
 
   final TripRepository repository;
   final String tripId;
   final String entryId;
   final String imagePath;
+  final String title;
+  final DateTime memoryDate;
 
   @override
   State<_EntryPhoto> createState() => _EntryPhotoState();
@@ -1010,7 +1088,11 @@ class _EntryPhotoState extends State<_EntryPhoto> {
           child: InkWell(
             onTap: () => Navigator.of(context).push(
               MaterialPageRoute<void>(
-                builder: (_) => _FullScreenPhoto(imageBytes: imageBytes),
+                builder: (_) => _FullScreenPhoto(
+                  imageBytes: imageBytes,
+                  title: widget.title,
+                  memoryDate: widget.memoryDate,
+                ),
               ),
             ),
             child: Image.memory(
@@ -1028,9 +1110,15 @@ class _EntryPhotoState extends State<_EntryPhoto> {
 }
 
 class _FullScreenPhoto extends StatelessWidget {
-  const _FullScreenPhoto({required this.imageBytes});
+  const _FullScreenPhoto({
+    required this.imageBytes,
+    required this.title,
+    required this.memoryDate,
+  });
 
   final Uint8List imageBytes;
+  final String title;
+  final DateTime memoryDate;
 
   @override
   Widget build(BuildContext context) {
@@ -1039,7 +1127,16 @@ class _FullScreenPhoto extends StatelessWidget {
       appBar: AppBar(
         backgroundColor: Colors.black,
         foregroundColor: Colors.white,
-        title: const Text('Photo'),
+        title: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(title, overflow: TextOverflow.ellipsis),
+            Text(
+              MaterialLocalizations.of(context).formatMediumDate(memoryDate),
+              style: const TextStyle(fontSize: 12),
+            ),
+          ],
+        ),
       ),
       body: Center(
         child: InteractiveViewer(

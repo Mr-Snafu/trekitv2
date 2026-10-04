@@ -133,11 +133,13 @@ class TripRepository {
         .collection('entries')
         .orderBy('createdAt', descending: true)
         .snapshots()
-        .map(
-          (snapshot) => snapshot.docs
+        .map((snapshot) {
+          final entries = snapshot.docs
               .map(JournalEntry.fromFirestore)
-              .toList(growable: false),
-        );
+              .toList(growable: false);
+          entries.sort((a, b) => b.timelineDate.compareTo(a.timelineDate));
+          return entries;
+        });
   }
 
   Future<void> createEntry({
@@ -145,6 +147,7 @@ class TripRepository {
     required String authorId,
     required String title,
     required String body,
+    required DateTime memoryDate,
     Uint8List? imageBytes,
     String? imageContentType,
     void Function(double progress)? onUploadProgress,
@@ -178,6 +181,7 @@ class TripRepository {
     final data = <String, dynamic>{
       'title': title.trim(),
       'body': body.trim(),
+      'memoryDate': Timestamp.fromDate(memoryDate),
       'authorId': authorId,
       'createdAt': now,
       'updatedAt': now,
@@ -323,10 +327,12 @@ class TripRepository {
     required String entryId,
     required String title,
     required String body,
+    required DateTime memoryDate,
   }) {
     return _trips.doc(tripId).collection('entries').doc(entryId).update({
       'title': title.trim(),
       'body': body.trim(),
+      'memoryDate': Timestamp.fromDate(memoryDate),
       'updatedAt': Timestamp.now(),
     });
   }
