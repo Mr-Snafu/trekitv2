@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "692333975435",
+    "project_id": "trekit-10e88",
+    "storage_bucket": "trekit-10e88.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:692333975435:android:c180b1d1059f98ab9b818e",
+        "android_client_info": {
+          "package_name": "com.cowtowndev.trekit"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyD4FxgwQ-2UJJcPXJzvWYcMd1FKotG99Jw"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

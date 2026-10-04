@@ -1,0 +1,283 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    // users/{uid}
+    //   uid: string (required, immutable, <= 128)
+    //   email: string (required, private PII, <= 254)
+    //   createdAt: timestamp (required, immutable)
+    //   updatedAt: timestamp (required)
+    //
+    // trips/{tripId}
+    //   name: string (required, 1-100)
+    //   description: string (required, 0-1000)
+    //   ownerId: string (required, immutable, <= 128)
+    //   createdAt: timestamp (required, immutable)
+    //   updatedAt: timestamp (required)
+    //
+    // trips/{tripId}/members/{uid}
+    //   userId: string (required, immutable, equals document ID)
+    //   role: string (required: owner, editor, or viewer)
+    //   createdBy: string (required, immutable, <= 128)
+    //   createdAt: timestamp (required, immutable)
+    //
+    // trips/{tripId}/entries/{entryId}
+    //   title: string (required, 1-120)
+    //   body: string (required, 1-10000)
+    //   authorId: string (required, immutable, <= 128)
+    //   imagePath: string (optional, immutable uploader-scoped Storage path)
+    //   createdAt: timestamp (required, immutable)
+    //   updatedAt: timestamp (required)
+    // ===============================================================
+
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function uidUnchanged() {
+      return !('uid' in request.resource.data) ||
+        request.resource.data.uid == request.auth.uid;
+    }
+
+    function uidNotModified() {
+      return !('uid' in request.resource.data) ||
+        request.resource.data.uid == resource.data.uid;
+    }
+
+    function hasRequiredFields(data, fields) {
+      return data.keys().hasAll(fields);
+    }
+
+    function hasOnlyAllowedFields(data, fields) {
+      return data.keys().hasOnly(fields);
+    }
+
+    function isValidId(value) {
+      return value is string && value.size() > 0 && value.size() <= 128;
+    }
+
+    function isRecent(value) {
+      return value is timestamp &&
+        value >= request.time - duration.value(5, 'm') &&
+        value <= request.time + duration.value(1, 'm');
+    }
+
+    function isValidEmail(value) {
+      return value is string &&
+        value.size() > 3 &&
+        value.size() <= 254 &&
+        value.matches('^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$');
+    }
+
+    function isValidUser(data) {
+      return hasRequiredFields(
+          data, ['uid', 'email', 'createdAt', 'updatedAt']) &&
+        hasOnlyAllowedFields(
+          data, ['uid', 'email', 'createdAt', 'updatedAt']) &&
+        isValidId(data.uid) &&
+        isValidEmail(data.email) &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidTrip(data) {
+      return hasRequiredFields(data, [
+          'name', 'description', 'ownerId', 'createdAt', 'updatedAt'
+        ]) &&
+        hasOnlyAllowedFields(data, [
+          'name', 'description', 'ownerId', 'createdAt', 'updatedAt'
+        ]) &&
+        data.name is string &&
+        data.name.size() > 0 &&
+        data.name.size() <= 100 &&
+        data.description is string &&
+        data.description.size() <= 1000 &&
+        isValidId(data.ownerId) &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidMember(data) {
+      return hasRequiredFields(
+          data, ['userId', 'role', 'createdBy', 'createdAt']) &&
+        hasOnlyAllowedFields(
+          data, ['userId', 'role', 'createdBy', 'createdAt']) &&
+        isValidId(data.userId) &&
+        data.role is string &&
+        data.role in ['owner', 'editor', 'viewer'] &&
+        isValidId(data.createdBy) &&
+        data.createdAt is timestamp;
+    }
+
+    function isValidEntryImagePath(data, tripId, entryId) {
+      return !('imagePath' in data) ||
+        (data.imagePath is string &&
+          data.imagePath.size() > 0 &&
+          data.imagePath.size() <= 512 &&
+          data.imagePath == 'users/' + data.authorId + '/trips/' + tripId +
+            '/entries/' + entryId + '/photo');
+    }
+
+    function isValidEntry(data, tripId, entryId) {
+      return hasRequiredFields(
+          data, ['title', 'body', 'authorId', 'createdAt', 'updatedAt']) &&
+        hasOnlyAllowedFields(
+          data, [
+            'title', 'body', 'authorId', 'createdAt', 'updatedAt', 'imagePath'
+          ]) &&
+        data.title is string &&
+        data.title.size() > 0 &&
+        data.title.size() <= 120 &&
+        data.body is string &&
+        data.body.size() > 0 &&
+        data.body.size() <= 10000 &&
+        isValidId(data.authorId) &&
+        isValidEntryImagePath(data, tripId, entryId) &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function entryIdentityUnchanged() {
+      return !request.resource.data.diff(resource.data).affectedKeys().hasAny([
+        'authorId', 'createdAt', 'imagePath'
+      ]);
+    }
+
+    function tripPath(tripId) {
+      return /databases/$(database)/documents/trips/$(tripId);
+    }
+
+    function memberPath(tripId, userId) {
+      return /databases/$(database)/documents/trips/$(tripId)/members/$(userId);
+    }
+
+    function tripExists(tripId) {
+      return exists(tripPath(tripId));
+    }
+
+    function isTripOwner(tripId) {
+      return isAuthenticated() &&
+        tripExists(tripId) &&
+        get(tripPath(tripId)).data.ownerId == request.auth.uid;
+    }
+
+    function isTripOwnerAfter(tripId) {
+      return isAuthenticated() &&
+        getAfter(tripPath(tripId)).data.ownerId == request.auth.uid;
+    }
+
+    function isTripMember(tripId) {
+      return isAuthenticated() &&
+        tripExists(tripId) &&
+        (get(tripPath(tripId)).data.ownerId == request.auth.uid ||
+          exists(memberPath(tripId, request.auth.uid)));
+    }
+
+    function canEditTrip(tripId) {
+      return isAuthenticated() &&
+        tripExists(tripId) &&
+        (get(tripPath(tripId)).data.ownerId == request.auth.uid ||
+          (exists(memberPath(tripId, request.auth.uid)) &&
+            get(memberPath(tripId, request.auth.uid)).data.role in [
+              'owner', 'editor'
+            ]));
+    }
+
+    match /users/{userId} {
+      allow read: if isOwner(userId);
+
+      allow create: if isOwner(userId) &&
+        uidUnchanged() &&
+        request.resource.data.uid == userId &&
+        isValidUser(request.resource.data) &&
+        isRecent(request.resource.data.createdAt) &&
+        isRecent(request.resource.data.updatedAt);
+
+      allow update: if isOwner(userId) &&
+        uidNotModified() &&
+        request.resource.data.uid == userId &&
+        isValidUser(request.resource.data) &&
+        request.resource.data.createdAt == resource.data.createdAt &&
+        isRecent(request.resource.data.updatedAt);
+
+      allow delete: if isOwner(userId);
+    }
+
+    match /trips/{tripId} {
+      allow read: if isAuthenticated() &&
+        (resource.data.ownerId == request.auth.uid ||
+          exists(memberPath(tripId, request.auth.uid)));
+
+      allow create: if isAuthenticated() &&
+        request.resource.data.ownerId == request.auth.uid &&
+        isValidTrip(request.resource.data) &&
+        isRecent(request.resource.data.createdAt) &&
+        isRecent(request.resource.data.updatedAt);
+
+      allow update: if isTripOwner(tripId) &&
+        isValidTrip(request.resource.data) &&
+        request.resource.data.ownerId == resource.data.ownerId &&
+        request.resource.data.createdAt == resource.data.createdAt &&
+        isRecent(request.resource.data.updatedAt);
+
+      allow delete: if false;
+
+      match /members/{memberId} {
+        allow read: if isTripMember(tripId);
+
+        allow create: if isAuthenticated() &&
+          isValidMember(request.resource.data) &&
+          request.resource.data.userId == memberId &&
+          request.resource.data.createdBy == request.auth.uid &&
+          isRecent(request.resource.data.createdAt) &&
+          isTripOwnerAfter(tripId) &&
+          ((memberId == request.auth.uid &&
+              request.resource.data.role == 'owner') ||
+            (memberId != request.auth.uid &&
+              request.resource.data.role in ['editor', 'viewer']));
+
+        allow update: if isTripOwner(tripId) &&
+          memberId != request.auth.uid &&
+          isValidMember(request.resource.data) &&
+          request.resource.data.userId == resource.data.userId &&
+          request.resource.data.createdBy == resource.data.createdBy &&
+          request.resource.data.createdAt == resource.data.createdAt &&
+          request.resource.data.role in ['editor', 'viewer'];
+
+        allow delete: if isTripOwner(tripId) &&
+          memberId != request.auth.uid;
+      }
+
+      match /entries/{entryId} {
+        allow read: if isTripMember(tripId);
+
+        allow create: if canEditTrip(tripId) &&
+          request.resource.data.authorId == request.auth.uid &&
+          isValidEntry(request.resource.data, tripId, entryId) &&
+          isRecent(request.resource.data.createdAt) &&
+          isRecent(request.resource.data.updatedAt);
+
+        allow update: if isTripMember(tripId) &&
+          (resource.data.authorId == request.auth.uid ||
+            isTripOwner(tripId)) &&
+          isValidEntry(request.resource.data, tripId, entryId) &&
+          entryIdentityUnchanged() &&
+          isRecent(request.resource.data.updatedAt);
+
+        allow delete: if isTripMember(tripId) &&
+          (resource.data.authorId == request.auth.uid ||
+            isTripOwner(tripId));
+      }
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
