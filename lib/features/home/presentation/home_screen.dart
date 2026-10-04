@@ -1,5 +1,8 @@
+import 'dart:typed_data';
+
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
 
 import '../../auth/data/auth_service.dart';
 import '../../trips/data/trip_repository.dart';
@@ -140,7 +143,7 @@ class _HomeScreenState extends State<HomeScreen> {
   Future<void> _createTrip() async {
     final draft = await showDialog<_TripDraft>(
       context: context,
-      builder: (_) => const _TripDialog(),
+      builder: (_) => _TripDialog(repository: _repository),
     );
     if (draft == null || !mounted) {
       return;
@@ -153,8 +156,11 @@ class _HomeScreenState extends State<HomeScreen> {
         name: draft.name,
         description: draft.description,
         location: draft.location,
+        status: draft.status,
         startDate: draft.startDate,
         endDate: draft.endDate,
+        coverImageBytes: draft.coverImageBytes,
+        coverContentType: draft.coverContentType,
       );
       if (mounted) {
         _showMessage('Trip created.');
@@ -340,7 +346,7 @@ class _HomeScreenState extends State<HomeScreen> {
   Future<void> _editTrip(Trip trip) async {
     final draft = await showDialog<_TripDraft>(
       context: context,
-      builder: (_) => _TripDialog(trip: trip),
+      builder: (_) => _TripDialog(repository: _repository, trip: trip),
     );
     if (draft == null || !mounted) {
       return;
@@ -350,11 +356,16 @@ class _HomeScreenState extends State<HomeScreen> {
     try {
       await _repository.updateTrip(
         tripId: trip.id,
+        ownerId: trip.ownerId,
         name: draft.name,
         description: draft.description,
         location: draft.location,
+        status: draft.status,
         startDate: draft.startDate,
         endDate: draft.endDate,
+        coverImageBytes: draft.coverImageBytes,
+        coverContentType: draft.coverContentType,
+        removeCover: draft.removeCover,
       );
       if (mounted) {
         _showMessage('Adventure updated.');
@@ -416,6 +427,144 @@ class _HomeScreenState extends State<HomeScreen> {
   void _showMessage(String message) {
     ScaffoldMessenger.of(context)
         .showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  Widget _buildAdventureCard(Trip trip) {
+    final isBusy = _busyTripIds.contains(trip.id);
+    return Card(
+      clipBehavior: Clip.antiAlias,
+      child: Semantics(
+        container: true,
+        button: true,
+        label: 'Open ${trip.name}',
+        child: InkWell(
+          onTap: isBusy ? null : () => _openTrip(trip),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              SizedBox(
+                height: 190,
+                width: double.infinity,
+                child: trip.coverImagePath == null
+                    ? Container(
+                        color: Theme.of(context).colorScheme.primaryContainer,
+                        alignment: Alignment.center,
+                        child: Icon(
+                          Icons.landscape_outlined,
+                          size: 72,
+                          color: Theme.of(context).colorScheme.primary,
+                        ),
+                      )
+                    : _TripCover(repository: _repository, trip: trip),
+              ),
+              Padding(
+                padding: const EdgeInsets.all(20),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      trip.status.label.toUpperCase(),
+                      style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                        color: _statusColor(context, trip.status),
+                        fontWeight: FontWeight.w800,
+                        letterSpacing: 1.1,
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Expanded(
+                          child: Text(
+                            trip.name,
+                            style: Theme.of(context).textTheme.titleLarge,
+                          ),
+                        ),
+                        if (isBusy)
+                          const Padding(
+                            padding: EdgeInsets.all(12),
+                            child: SizedBox.square(
+                              dimension: 18,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            ),
+                          )
+                        else if (trip.accessRole == 'owner')
+                          PopupMenuButton<_TripAction>(
+                            tooltip: 'Adventure options',
+                            onSelected: (action) {
+                              switch (action) {
+                                case _TripAction.edit:
+                                  _editTrip(trip);
+                                case _TripAction.delete:
+                                  _deleteTrip(trip);
+                              }
+                            },
+                            itemBuilder: (_) => const [
+                              PopupMenuItem(
+                                value: _TripAction.edit,
+                                child: ListTile(
+                                  leading: Icon(Icons.edit_outlined),
+                                  title: Text('Edit adventure'),
+                                ),
+                              ),
+                              PopupMenuItem(
+                                value: _TripAction.delete,
+                                child: ListTile(
+                                  leading: Icon(Icons.delete_outline),
+                                  title: Text('Delete adventure'),
+                                ),
+                              ),
+                            ],
+                          ),
+                      ],
+                    ),
+                    if (trip.location.isNotEmpty ||
+                        trip.startDate != null ||
+                        trip.endDate != null ||
+                        trip.accessRole != 'owner') ...[
+                      const SizedBox(height: 10),
+                      Wrap(
+                        spacing: 12,
+                        runSpacing: 8,
+                        children: [
+                          if (trip.location.isNotEmpty)
+                            _TripFact(
+                              icon: Icons.place_outlined,
+                              label: trip.location,
+                            ),
+                          if (trip.startDate != null || trip.endDate != null)
+                            _TripFact(
+                              icon: Icons.calendar_today_outlined,
+                              label: _formatTripDates(context, trip),
+                            ),
+                          if (trip.accessRole != 'owner')
+                            _TripFact(
+                              icon: trip.accessRole == 'editor'
+                                  ? Icons.edit_outlined
+                                  : Icons.visibility_outlined,
+                              label: trip.accessRole == 'editor'
+                                  ? 'Editor access'
+                                  : 'Shared with you',
+                            ),
+                        ],
+                      ),
+                    ],
+                    if (trip.description.isNotEmpty) ...[
+                      const SizedBox(height: 12),
+                      Text(
+                        trip.description,
+                        maxLines: 3,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 
   Widget _buildAdventuresPage(BuildContext context) {
@@ -518,6 +667,10 @@ class _HomeScreenState extends State<HomeScreen> {
                     filter: _ownershipFilter,
                     sortOrder: _sortOrder,
                   );
+                  final groupedTrips = <Trip>[
+                    for (final status in TripStatus.values)
+                      ...visibleTrips.where((trip) => trip.status == status),
+                  ];
                   return Column(
                     children: [
                       AdventureOrganizer(
@@ -555,166 +708,34 @@ class _HomeScreenState extends State<HomeScreen> {
                                   20,
                                   104,
                                 ),
-                                itemCount: visibleTrips.length,
+                                itemCount: groupedTrips.length,
                                 separatorBuilder: (_, _) =>
                                     const SizedBox(height: 12),
                                 itemBuilder: (context, index) {
-                                  final trip = visibleTrips[index];
-                                  return Card(
-                                    clipBehavior: Clip.antiAlias,
-                                    child: Semantics(
-                                      container: true,
-                                      button: true,
-                                      label: 'Open ${trip.name}',
-                                      child: InkWell(
-                                        onTap: _busyTripIds.contains(trip.id)
-                                            ? null
-                                            : () => _openTrip(trip),
-                                        child: Padding(
-                                          padding: const EdgeInsets.all(20),
-                                          child: Row(
-                                            children: [
-                                              const CircleAvatar(
-                                                radius: 24,
-                                                child: Icon(Icons.hiking),
-                                              ),
-                                              const SizedBox(width: 16),
-                                              Expanded(
-                                                child: Column(
-                                                  crossAxisAlignment:
-                                                      CrossAxisAlignment.start,
-                                                  children: [
-                                                    Text(
-                                                      trip.name,
-                                                      style: Theme.of(context)
-                                                          .textTheme
-                                                          .titleLarge,
-                                                    ),
-                                                    if (trip
-                                                            .location
-                                                            .isNotEmpty ||
-                                                        trip.startDate !=
-                                                            null ||
-                                                        trip.endDate !=
-                                                            null) ...[
-                                                      const SizedBox(height: 7),
-                                                      Wrap(
-                                                        spacing: 14,
-                                                        runSpacing: 6,
-                                                        children: [
-                                                          if (trip
-                                                              .location
-                                                              .isNotEmpty)
-                                                            _TripFact(
-                                                              icon: Icons
-                                                                  .place_outlined,
-                                                              label:
-                                                                  trip.location,
-                                                            ),
-                                                          if (trip.startDate !=
-                                                                  null ||
-                                                              trip.endDate !=
-                                                                  null)
-                                                            _TripFact(
-                                                              icon: Icons
-                                                                  .calendar_today_outlined,
-                                                              label:
-                                                                  _formatTripDates(
-                                                                    context,
-                                                                    trip,
-                                                                  ),
-                                                            ),
-                                                        ],
-                                                      ),
-                                                    ],
-                                                    if (trip
-                                                        .description
-                                                        .isNotEmpty) ...[
-                                                      const SizedBox(height: 6),
-                                                      Text(
-                                                        trip.description,
-                                                        maxLines: 2,
-                                                        overflow: TextOverflow
-                                                            .ellipsis,
-                                                      ),
-                                                    ],
-                                                  ],
-                                                ),
-                                              ),
-                                              if (trip.accessRole !=
-                                                  'owner') ...[
-                                                const SizedBox(width: 12),
-                                                Chip(
-                                                  avatar: Icon(
-                                                    trip.accessRole == 'editor'
-                                                        ? Icons.edit_outlined
-                                                        : Icons
-                                                              .visibility_outlined,
-                                                    size: 16,
-                                                  ),
-                                                  label: Text(
-                                                    trip.accessRole == 'editor'
-                                                        ? 'Editor'
-                                                        : 'Shared',
-                                                  ),
-                                                ),
-                                              ],
-                                              if (_busyTripIds.contains(
-                                                trip.id,
-                                              ))
-                                                const Padding(
-                                                  padding: EdgeInsets.all(12),
-                                                  child: SizedBox.square(
-                                                    dimension: 18,
-                                                    child:
-                                                        CircularProgressIndicator(
-                                                          strokeWidth: 2,
-                                                        ),
-                                                  ),
-                                                )
-                                              else if (trip.accessRole ==
-                                                  'owner')
-                                                PopupMenuButton<_TripAction>(
-                                                  tooltip: 'Adventure options',
-                                                  onSelected: (action) {
-                                                    switch (action) {
-                                                      case _TripAction.edit:
-                                                        _editTrip(trip);
-                                                      case _TripAction.delete:
-                                                        _deleteTrip(trip);
-                                                    }
-                                                  },
-                                                  itemBuilder: (_) => const [
-                                                    PopupMenuItem(
-                                                      value: _TripAction.edit,
-                                                      child: ListTile(
-                                                        leading: Icon(
-                                                          Icons.edit_outlined,
-                                                        ),
-                                                        title: Text(
-                                                          'Edit adventure',
-                                                        ),
-                                                      ),
-                                                    ),
-                                                    PopupMenuItem(
-                                                      value: _TripAction.delete,
-                                                      child: ListTile(
-                                                        leading: Icon(
-                                                          Icons.delete_outline,
-                                                        ),
-                                                        title: Text(
-                                                          'Delete adventure',
-                                                        ),
-                                                      ),
-                                                    ),
-                                                  ],
-                                                ),
-                                              const Icon(Icons.chevron_right),
-                                            ],
+                                  final trip = groupedTrips[index];
+                                  return Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.stretch,
+                                    children: [
+                                      if (index == 0 ||
+                                          groupedTrips[index - 1].status !=
+                                              trip.status)
+                                        Padding(
+                                          padding: const EdgeInsets.fromLTRB(
+                                            2,
+                                            12,
+                                            2,
+                                            12,
+                                          ),
+                                          child: Text(
+                                            trip.status.label,
+                                            style: Theme.of(context)
+                                                .textTheme
+                                                .headlineSmall,
                                           ),
                                         ),
-                                      ),
-                                    ),
+                                      _buildAdventureCard(trip),
+                                    ],
                                   );
                                 },
                               ),
@@ -1239,6 +1260,67 @@ class _InlineMessage extends StatelessWidget {
   }
 }
 
+class _TripCover extends StatefulWidget {
+  const _TripCover({required this.repository, required this.trip});
+
+  final TripRepository repository;
+  final Trip trip;
+
+  @override
+  State<_TripCover> createState() => _TripCoverState();
+}
+
+class _TripCoverState extends State<_TripCover> {
+  late Future<Uint8List> _cover = widget.repository.getTripCover(widget.trip);
+
+  @override
+  void didUpdateWidget(covariant _TripCover oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.trip.coverImagePath != widget.trip.coverImagePath ||
+        oldWidget.trip.updatedAt != widget.trip.updatedAt) {
+      _cover = widget.repository.getTripCover(widget.trip);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<Uint8List>(
+      future: _cover,
+      builder: (context, snapshot) {
+        if (snapshot.hasData) {
+          return Image.memory(
+            snapshot.data!,
+            width: double.infinity,
+            height: double.infinity,
+            fit: BoxFit.cover,
+            cacheWidth: 1200,
+          );
+        }
+        if (snapshot.hasError) {
+          return Container(
+            color: Theme.of(context).colorScheme.primaryContainer,
+            alignment: Alignment.center,
+            child: const Icon(Icons.broken_image_outlined, size: 48),
+          );
+        }
+        return Container(
+          color: Theme.of(context).colorScheme.surfaceContainerHighest,
+          alignment: Alignment.center,
+          child: const CircularProgressIndicator(),
+        );
+      },
+    );
+  }
+}
+
+Color _statusColor(BuildContext context, TripStatus status) {
+  return switch (status) {
+    TripStatus.draft => const Color(0xFF8A6823),
+    TripStatus.live => const Color(0xFF137A62),
+    TripStatus.completed => Theme.of(context).colorScheme.primary,
+  };
+}
+
 class AdventureOrganizer extends StatelessWidget {
   const AdventureOrganizer({
     super.key,
@@ -1537,22 +1619,31 @@ class _TripDraft {
     required this.name,
     required this.description,
     required this.location,
+    required this.status,
+    required this.removeCover,
     this.startDate,
     this.endDate,
+    this.coverImageBytes,
+    this.coverContentType,
   });
 
   final String name;
   final String description;
   final String location;
+  final TripStatus status;
+  final bool removeCover;
   final DateTime? startDate;
   final DateTime? endDate;
+  final Uint8List? coverImageBytes;
+  final String? coverContentType;
 }
 
 enum _TripAction { edit, delete }
 
 class _TripDialog extends StatefulWidget {
-  const _TripDialog({this.trip});
+  const _TripDialog({required this.repository, this.trip});
 
+  final TripRepository repository;
   final Trip? trip;
 
   @override
@@ -1570,6 +1661,54 @@ class _TripDialogState extends State<_TripDialog> {
   );
   late DateTime? _startDate = widget.trip?.startDate;
   late DateTime? _endDate = widget.trip?.endDate;
+  late TripStatus _status = widget.trip?.status ?? TripStatus.draft;
+  final _imagePicker = ImagePicker();
+  Uint8List? _coverImageBytes;
+  String? _coverContentType;
+  bool _removeCover = false;
+  bool _isPickingCover = false;
+
+  Future<void> _pickCover() async {
+    setState(() => _isPickingCover = true);
+    try {
+      final image = await _imagePicker.pickImage(
+        source: ImageSource.gallery,
+        imageQuality: 85,
+        maxWidth: 2400,
+      );
+      if (image == null) {
+        return;
+      }
+      final bytes = await image.readAsBytes();
+      if (bytes.isEmpty || bytes.length > TripRepository.maxImageBytes) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Choose a photo smaller than 25 MB.')),
+          );
+        }
+        return;
+      }
+      if (mounted) {
+        setState(() {
+          _coverImageBytes = bytes;
+          _coverContentType = _contentTypeFor(image.name, image.mimeType);
+          _removeCover = false;
+        });
+      }
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('The photo picker could not open. Please try again.'),
+          ),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _isPickingCover = false);
+      }
+    }
+  }
 
   @override
   void dispose() {
@@ -1619,8 +1758,12 @@ class _TripDialogState extends State<_TripDialog> {
         name: _nameController.text.trim(),
         description: _descriptionController.text.trim(),
         location: _locationController.text.trim(),
+        status: _status,
+        removeCover: _removeCover,
         startDate: _startDate,
         endDate: _endDate,
+        coverImageBytes: _coverImageBytes,
+        coverContentType: _coverContentType,
       ),
     );
   }
@@ -1665,6 +1808,82 @@ class _TripDialogState extends State<_TripDialog> {
                     labelText: 'Location (optional)',
                     prefixIcon: Icon(Icons.place_outlined),
                   ),
+                ),
+                const SizedBox(height: 12),
+                DropdownButtonFormField<TripStatus>(
+                  initialValue: _status,
+                  decoration: const InputDecoration(
+                    labelText: 'Adventure status',
+                    prefixIcon: Icon(Icons.flag_outlined),
+                  ),
+                  items: [
+                    for (final status in TripStatus.values)
+                      DropdownMenuItem(
+                        value: status,
+                        child: Text(status.label),
+                      ),
+                  ],
+                  onChanged: (status) {
+                    if (status != null) {
+                      setState(() => _status = status);
+                    }
+                  },
+                ),
+                const SizedBox(height: 12),
+                if (_coverImageBytes case final bytes?) ...[
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(14),
+                    child: Image.memory(
+                      bytes,
+                      width: double.infinity,
+                      height: 180,
+                      fit: BoxFit.cover,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                ] else if (widget.trip?.coverImagePath != null &&
+                    !_removeCover) ...[
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(14),
+                    child: SizedBox(
+                      height: 180,
+                      child: _TripCover(
+                        repository: widget.repository,
+                        trip: widget.trip!,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                ],
+                Row(
+                  children: [
+                    OutlinedButton.icon(
+                      onPressed: _isPickingCover ? null : _pickCover,
+                      icon: _isPickingCover
+                          ? const SizedBox.square(
+                              dimension: 16,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Icon(Icons.add_photo_alternate_outlined),
+                      label: Text(
+                        _coverImageBytes != null ||
+                                (widget.trip?.coverImagePath != null &&
+                                    !_removeCover)
+                            ? 'Change cover'
+                            : 'Add cover',
+                      ),
+                    ),
+                    if (_coverImageBytes != null ||
+                        (widget.trip?.coverImagePath != null && !_removeCover))
+                      TextButton(
+                        onPressed: () => setState(() {
+                          _coverImageBytes = null;
+                          _coverContentType = null;
+                          _removeCover = widget.trip?.coverImagePath != null;
+                        }),
+                        child: const Text('Remove'),
+                      ),
+                  ],
                 ),
                 const SizedBox(height: 12),
                 Row(
@@ -1760,6 +1979,23 @@ String _formatTripDates(BuildContext context, Trip trip) {
     return '${localizations.formatMediumDate(start)} – ${localizations.formatMediumDate(end)}';
   }
   return localizations.formatMediumDate(start ?? end!);
+}
+
+String _contentTypeFor(String fileName, String? detectedType) {
+  if (detectedType != null && detectedType.startsWith('image/')) {
+    return detectedType;
+  }
+  final lowerName = fileName.toLowerCase();
+  if (lowerName.endsWith('.png')) {
+    return 'image/png';
+  }
+  if (lowerName.endsWith('.webp')) {
+    return 'image/webp';
+  }
+  if (lowerName.endsWith('.heic') || lowerName.endsWith('.heif')) {
+    return 'image/heic';
+  }
+  return 'image/jpeg';
 }
 
 class _MessageState extends StatelessWidget {

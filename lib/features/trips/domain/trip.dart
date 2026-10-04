@@ -1,5 +1,23 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 
+enum TripStatus {
+  live('live', 'Live'),
+  draft('draft', 'Draft'),
+  completed('completed', 'Completed');
+
+  const TripStatus(this.value, this.label);
+
+  final String value;
+  final String label;
+
+  static TripStatus fromValue(Object? value) {
+    return TripStatus.values.firstWhere(
+      (status) => status.value == value,
+      orElse: () => TripStatus.live,
+    );
+  }
+}
+
 class Trip {
   const Trip({
     required this.id,
@@ -12,6 +30,8 @@ class Trip {
     this.startDate,
     this.endDate,
     this.accessRole = 'owner',
+    this.status = TripStatus.live,
+    this.coverImagePath,
   });
 
   final String id;
@@ -24,6 +44,8 @@ class Trip {
   final DateTime? startDate;
   final DateTime? endDate;
   final String accessRole;
+  final TripStatus status;
+  final String? coverImagePath;
 
   factory Trip.fromFirestore(DocumentSnapshot<Map<String, dynamic>> snapshot) {
     final data = snapshot.data() ?? const <String, dynamic>{};
@@ -37,6 +59,8 @@ class Trip {
       location: data['location'] as String? ?? '',
       startDate: _optionalDateFrom(data['startDate']),
       endDate: _optionalDateFrom(data['endDate']),
+      status: TripStatus.fromValue(data['status']),
+      coverImagePath: data['coverImagePath'] as String?,
     );
   }
 
@@ -52,6 +76,8 @@ class Trip {
       startDate: startDate,
       endDate: endDate,
       accessRole: role,
+      status: status,
+      coverImagePath: coverImagePath,
     );
   }
 

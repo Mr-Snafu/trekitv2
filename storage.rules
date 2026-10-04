@@ -23,6 +23,22 @@ service firebase.storage {
         request.resource.contentType.matches('image/.*');
     }
 
+    function isValidCoverUpload(userId, tripId) {
+      return isOwner(userId) &&
+        isValidId(tripId) &&
+        request.resource.size > 0 &&
+        request.resource.size <= 25 * 1024 * 1024 &&
+        request.resource.contentType is string &&
+        request.resource.contentType.matches('image/.*');
+    }
+
+    // Owners write the cover; trusted members read it through getTripCover.
+    match /users/{userId}/trips/{tripId}/cover {
+      allow get: if isOwner(userId);
+      allow create, update: if isValidCoverUpload(userId, tripId);
+      allow delete: if isOwner(userId);
+    }
+
     // One private photo per entry. The UID path prevents cross-user access.
     match /users/{userId}/trips/{tripId}/entries/{entryId}/photo {
       allow get: if isOwner(userId);

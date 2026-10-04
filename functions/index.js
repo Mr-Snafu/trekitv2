@@ -10,6 +10,14 @@ const db = getFirestore("trekit");
 const auth = getAuth();
 const storage = getStorage();
 const options = {region: "us-central1", enforceAppCheck: false};
+const browserCors = [
+  "http://127.0.0.1:7357",
+  "http://localhost:7357",
+  "https://trekit.online",
+  "https://trekit-10e88.web.app",
+  "https://trekit-10e88.firebaseapp.com",
+  /^https:\/\/trekit-10e88--[a-z0-9-]+\.web\.app$/,
+];
 const accountOptions = {
   ...options,
   timeoutSeconds: 540,
@@ -114,11 +122,15 @@ exports.removeTripMember = onCall(options, async (request) => {
 exports.deleteTrip = onCall(options, async (request) => {
   const ownerId = requireUser(request);
   const tripId = requireString(request.data?.tripId, "Trip", 128);
-  const {tripRef} = await requireTripOwner(tripId, ownerId);
+  const {tripRef, trip} = await requireTripOwner(tripId, ownerId);
   const entries = await tripRef.collection("entries").get();
   const imagePaths = entries.docs
       .map((entry) => entry.get("imagePath"))
       .filter((path) => typeof path === "string");
+  const coverImagePath = trip.get("coverImagePath");
+  if (typeof coverImagePath === "string") {
+    imagePaths.push(coverImagePath);
+  }
 
   await Promise.all(imagePaths.map(async (imagePath) => {
     try {
@@ -187,13 +199,7 @@ exports.deleteAccount = onCall(accountOptions, async (request) => {
 
 exports.getEntryPhoto = onRequest({
   region: "us-central1",
-  cors: [
-    "http://127.0.0.1:7357",
-    "http://localhost:7357",
-    "https://trekit.online",
-    "https://trekit-10e88.web.app",
-    "https://trekit-10e88.firebaseapp.com",
-  ],
+  cors: browserCors,
 }, async (request, response) => {
   if (request.method !== "GET") {
     response.status(405).send("Method not allowed.");
@@ -262,5 +268,76 @@ exports.getEntryPhoto = onRequest({
         .pipe(response);
   } catch (_) {
     response.status(404).send("Photo not found.");
+  }
+});
+
+exports.getTripCover = onRequest({
+  region: "us-central1",
+  cors: browserCors,
+}, async (request, response) => {
+  if (request.method !== "GET") {
+    response.status(405).send("Method not allowed.");
+    return;
+  }
+
+  const authorization = request.get("authorization") || "";
+  if (!authorization.startsWith("Bearer ")) {
+    response.status(401).send("Sign in to continue.");
+    return;
+  }
+
+  let userId;
+  try {
+    userId = (await auth.verifyIdToken(authorization.slice(7))).uid;
+  } catch (_) {
+    response.status(401).send("Your session is no longer valid.");
+    return;
+  }
+
+  let tripId;
+  try {
+    tripId = requireString(request.query.tripId, "Trip", 128);
+  } catch (error) {
+    response.status(400).send(error.message);
+    return;
+  }
+
+  const tripRef = db.collection("trips").doc(tripId);
+  const [trip, membership] = await Promise.all([
+    tripRef.get(),
+    tripRef.collection("members").doc(userId).get(),
+  ]);
+  if (!trip.exists) {
+    response.status(404).send("Cover not found.");
+    return;
+  }
+  if (trip.get("ownerId") !== userId && !membership.exists) {
+    response.status(403).send("You do not have access to this cover.");
+    return;
+  }
+
+  const coverImagePath = trip.get("coverImagePath");
+  const expectedPath = `users/${trip.get("ownerId")}/trips/${tripId}/cover`;
+  if (coverImagePath !== expectedPath) {
+    response.status(404).send("Cover not found.");
+    return;
+  }
+
+  const file = storage.bucket().file(coverImagePath);
+  try {
+    const [metadata] = await file.getMetadata();
+    response.set("Content-Type", metadata.contentType || "image/jpeg");
+    response.set("Cache-Control", "private, max-age=300");
+    file.createReadStream()
+        .on("error", () => {
+          if (!response.headersSent) {
+            response.status(404).send("Cover not found.");
+          } else {
+            response.end();
+          }
+        })
+        .pipe(response);
+  } catch (_) {
+    response.status(404).send("Cover not found.");
   }
 });

@@ -100,13 +100,27 @@ class TripRepository {
     required String name,
     required String description,
     required String location,
+    required TripStatus status,
     DateTime? startDate,
     DateTime? endDate,
+    Uint8List? coverImageBytes,
+    String? coverContentType,
   }) async {
     final trip = _trips.doc();
     final ownerMembership = trip.collection('members').doc(ownerId);
     final now = Timestamp.now();
     final batch = _firestore.batch();
+    final coverImagePath = coverImageBytes == null
+        ? null
+        : 'users/$ownerId/trips/${trip.id}/cover';
+
+    if (coverImageBytes != null) {
+      await _uploadPhoto(
+        path: coverImagePath!,
+        bytes: coverImageBytes,
+        contentType: coverContentType,
+      );
+    }
 
     batch.set(trip, <String, dynamic>{
       'name': name.trim(),
@@ -114,6 +128,8 @@ class TripRepository {
       if (location.trim().isNotEmpty) 'location': location.trim(),
       if (startDate != null) 'startDate': Timestamp.fromDate(startDate),
       if (endDate != null) 'endDate': Timestamp.fromDate(endDate),
+      'status': status.value,
+      'coverImagePath': ?coverImagePath,
       'ownerId': ownerId,
       'createdAt': now,
       'updatedAt': now,
@@ -125,8 +141,35 @@ class TripRepository {
       'createdAt': now,
     });
 
-    await batch.commit();
+    try {
+      await batch.commit();
+    } catch (_) {
+      if (coverImagePath != null) {
+        try {
+          await _storage.ref(coverImagePath).delete();
+        } catch (_) {
+          // Preserve the original Firestore error if cleanup cannot complete.
+        }
+      }
+      rethrow;
+    }
     return trip.id;
+  }
+
+  Future<void> _uploadPhoto({
+    required String path,
+    required Uint8List bytes,
+    String? contentType,
+  }) async {
+    if (bytes.isEmpty || bytes.length > maxImageBytes) {
+      throw ArgumentError('The photo must be between 1 byte and 25 MB.');
+    }
+    await _storage
+        .ref(path)
+        .putData(
+          bytes,
+          SettableMetadata(contentType: contentType ?? 'image/jpeg'),
+        );
   }
 
   Stream<List<JournalEntry>> watchEntries(String tripId) {
@@ -282,6 +325,30 @@ class TripRepository {
     return response.bodyBytes;
   }
 
+  Future<Uint8List> getTripCover(Trip trip) async {
+    final token = await _auth.currentUser?.getIdToken();
+    if (token == null) {
+      throw const TripServiceException('Sign in to continue.');
+    }
+    final response = await _httpClient.get(
+      Uri.https(
+        'us-central1-trekit-10e88.cloudfunctions.net',
+        '/getTripCover',
+        {
+          'tripId': trip.id,
+          'version': trip.updatedAt.millisecondsSinceEpoch.toString(),
+        },
+      ),
+      headers: {'Authorization': 'Bearer $token'},
+    );
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw TripServiceException(
+        response.body.isEmpty ? 'Cover unavailable.' : response.body,
+      );
+    }
+    return response.bodyBytes;
+  }
+
   Future<void> shareTrip({
     required String tripId,
     required String email,
@@ -319,13 +386,27 @@ class TripRepository {
 
   Future<void> updateTrip({
     required String tripId,
+    required String ownerId,
     required String name,
     required String description,
     required String location,
+    required TripStatus status,
     DateTime? startDate,
     DateTime? endDate,
-  }) {
-    return _trips.doc(tripId).update({
+    Uint8List? coverImageBytes,
+    String? coverContentType,
+    bool removeCover = false,
+  }) async {
+    final coverImagePath = 'users/$ownerId/trips/$tripId/cover';
+    if (coverImageBytes != null) {
+      await _uploadPhoto(
+        path: coverImagePath,
+        bytes: coverImageBytes,
+        contentType: coverContentType,
+      );
+    }
+
+    await _trips.doc(tripId).update({
       'name': name.trim(),
       'description': description.trim(),
       'location': location.trim().isEmpty
@@ -337,8 +418,22 @@ class TripRepository {
       'endDate': endDate == null
           ? FieldValue.delete()
           : Timestamp.fromDate(endDate),
+      'status': status.value,
+      if (coverImageBytes != null) 'coverImagePath': coverImagePath,
+      if (removeCover && coverImageBytes == null)
+        'coverImagePath': FieldValue.delete(),
       'updatedAt': Timestamp.now(),
     });
+
+    if (removeCover && coverImageBytes == null) {
+      try {
+        await _storage.ref(coverImagePath).delete();
+      } on FirebaseException catch (error) {
+        if (error.code != 'object-not-found') {
+          rethrow;
+        }
+      }
+    }
   }
 
   Future<void> deleteTrip(String tripId) async {

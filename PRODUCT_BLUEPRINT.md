@@ -16,7 +16,7 @@ This document is the source of truth for TrekIt V2 development. TrekIt is a priv
 | Area | Purpose | Current status |
 | --- | --- | --- |
 | Feed | Private, newest-first activity from accessible adventures | Initial live version shows adventure creation and journal-entry activity |
-| Adventures | Organize owned and shared trips and open their journals | Live with search, filters, sorting, editing, deletion, sharing, entries, and photos |
+| Adventures | Organize owned and shared trips and open their journals | Live with lifecycle groups, cover images, search, filters, sorting, editing, deletion, sharing, entries, and photos |
 | Create | Start an adventure or add a journal entry from anywhere | Initial creation menu is live |
 | Circle | Manage trusted connections, requests, blocking, and TrekIt IDs | Navigation destination is live; full relationship model is pending |
 | Profile | Identity, verification, settings, privacy, export, and account controls | Initial account, verification, password, deletion, and sign-out controls are live |
@@ -32,8 +32,8 @@ This document is the source of truth for TrekIt V2 development. TrekIt is a priv
 
 ### Adventures
 
-- Support Draft, Live, and Completed lifecycle states.
-- Add adventure cover images and richer card layouts.
+- Draft, Live, and Completed lifecycle states are live.
+- Adventure cover images and grouped image-card layouts are live.
 - Preserve private membership roles and owner controls.
 - Keep journal memories ordered by their memory date and prohibit future entry dates.
 

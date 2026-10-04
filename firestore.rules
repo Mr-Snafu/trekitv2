@@ -16,6 +16,8 @@ service cloud.firestore {
     //   location: string (optional, 1-160)
     //   startDate: timestamp (optional)
     //   endDate: timestamp (optional, not before startDate when both exist)
+    //   status: string (optional for legacy trips: draft, live, completed)
+    //   coverImagePath: string (optional, owner-scoped Storage path)
     //   ownerId: string (required, immutable, <= 128)
     //   createdAt: timestamp (required, immutable)
     //   updatedAt: timestamp (required)
@@ -90,13 +92,22 @@ service cloud.firestore {
         data.updatedAt is timestamp;
     }
 
-    function isValidTrip(data) {
+    function isValidTripCoverPath(data, tripId) {
+      return !('coverImagePath' in data) ||
+        (data.coverImagePath is string &&
+          data.coverImagePath.size() > 0 &&
+          data.coverImagePath.size() <= 512 &&
+          data.coverImagePath == 'users/' + data.ownerId + '/trips/' +
+            tripId + '/cover');
+    }
+
+    function isValidTrip(data, tripId) {
       return hasRequiredFields(data, [
           'name', 'description', 'ownerId', 'createdAt', 'updatedAt'
         ]) &&
         hasOnlyAllowedFields(data, [
           'name', 'description', 'location', 'startDate', 'endDate',
-          'ownerId', 'createdAt', 'updatedAt'
+          'status', 'coverImagePath', 'ownerId', 'createdAt', 'updatedAt'
         ]) &&
         data.name is string &&
         data.name.size() > 0 &&
@@ -111,7 +122,11 @@ service cloud.firestore {
         (!('endDate' in data) || data.endDate is timestamp) &&
         (!(('startDate' in data) && ('endDate' in data)) ||
           data.endDate >= data.startDate) &&
+        (!('status' in data) ||
+          (data.status is string &&
+            data.status in ['draft', 'live', 'completed'])) &&
         isValidId(data.ownerId) &&
+        isValidTripCoverPath(data, tripId) &&
         data.createdAt is timestamp &&
         data.updatedAt is timestamp;
     }
@@ -239,12 +254,13 @@ service cloud.firestore {
 
       allow create: if isAuthenticated() &&
         request.resource.data.ownerId == request.auth.uid &&
-        isValidTrip(request.resource.data) &&
+        'status' in request.resource.data &&
+        isValidTrip(request.resource.data, tripId) &&
         isRecent(request.resource.data.createdAt) &&
         isRecent(request.resource.data.updatedAt);
 
       allow update: if isTripOwner(tripId) &&
-        isValidTrip(request.resource.data) &&
+        isValidTrip(request.resource.data, tripId) &&
         request.resource.data.ownerId == resource.data.ownerId &&
         request.resource.data.createdAt == resource.data.createdAt &&
         isRecent(request.resource.data.updatedAt);
