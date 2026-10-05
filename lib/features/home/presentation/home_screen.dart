@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
@@ -13,6 +14,7 @@ import '../../circle/data/circle_repository.dart';
 import '../../circle/domain/circle_state.dart';
 import '../../../core/download/download_file.dart';
 import '../../notifications/data/notification_repository.dart';
+import '../../notifications/data/push_notification_service.dart';
 import '../../notifications/domain/app_notification.dart';
 import '../../profile/data/profile_repository.dart';
 import '../../profile/domain/profile_state.dart';
@@ -40,6 +42,9 @@ class _HomeScreenState extends State<HomeScreen> {
   late final ProfileRepository _profileRepository = ProfileRepository();
   late final NotificationRepository _notificationRepository =
       NotificationRepository();
+  late final PushNotificationService _pushNotificationService =
+      PushNotificationService();
+  StreamSubscription<RemoteMessage>? _foregroundMessageSubscription;
   final _searchController = TextEditingController();
   final Set<String> _busyTripIds = <String>{};
   List<Trip> _latestTrips = const [];
@@ -57,12 +62,31 @@ class _HomeScreenState extends State<HomeScreen> {
   void initState() {
     super.initState();
     _createOrRefreshProfile();
+    _initializePushNotifications();
   }
 
   @override
   void dispose() {
     _searchController.dispose();
+    unawaited(_foregroundMessageSubscription?.cancel());
+    unawaited(_pushNotificationService.dispose());
     super.dispose();
+  }
+
+  Future<void> _initializePushNotifications() async {
+    try {
+      await _pushNotificationService.initializeSilently();
+      _foregroundMessageSubscription ??= _pushNotificationService
+          .foregroundMessages
+          .listen((message) {
+            if (!mounted) return;
+            final title = message.notification?.title ?? 'TrekIt update';
+            final body = message.notification?.body;
+            _showMessage(body == null ? title : '$title — $body');
+          });
+    } catch (_) {
+      // Push is optional; the private in-app inbox remains available.
+    }
   }
 
   void _clearOrganizationControls() {
@@ -837,6 +861,7 @@ class _HomeScreenState extends State<HomeScreen> {
             3 => _CirclePage(repository: _circleRepository),
             4 => _ProfilePage(
               repository: _profileRepository,
+              pushNotificationService: _pushNotificationService,
               isSigningOut: _isSigningOut,
               isDeletingAccount: _isDeletingAccount,
               onOpenSettings: _openAccountSettings,
@@ -2396,6 +2421,7 @@ class _CircleEmptyMessage extends StatelessWidget {
 class _ProfilePage extends StatefulWidget {
   const _ProfilePage({
     required this.repository,
+    required this.pushNotificationService,
     required this.isSigningOut,
     required this.isDeletingAccount,
     required this.onOpenSettings,
@@ -2407,6 +2433,7 @@ class _ProfilePage extends StatefulWidget {
   });
 
   final ProfileRepository repository;
+  final PushNotificationService pushNotificationService;
   final bool isSigningOut;
   final bool isDeletingAccount;
   final VoidCallback onOpenSettings;
@@ -2426,12 +2453,52 @@ class _ProfilePageState extends State<_ProfilePage> {
   bool _isLoading = true;
   bool _isSaving = false;
   bool _isExporting = false;
+  bool _isUpdatingPush = false;
   bool _preferencesDirty = false;
+  BrowserPushStatus? _pushStatus;
 
   @override
   void initState() {
     super.initState();
     _load();
+    _loadPushStatus();
+  }
+
+  Future<void> _loadPushStatus() async {
+    try {
+      final status = await widget.pushNotificationService.getStatus();
+      if (mounted) setState(() => _pushStatus = status);
+    } catch (_) {
+      if (mounted) setState(() => _pushStatus = BrowserPushStatus.unsupported);
+    }
+  }
+
+  Future<void> _toggleBrowserPush() async {
+    final status = _pushStatus;
+    if (status == null) return;
+    setState(() => _isUpdatingPush = true);
+    try {
+      final updated = status == BrowserPushStatus.enabled
+          ? await widget.pushNotificationService.disable()
+          : await widget.pushNotificationService.enable();
+      if (!mounted) return;
+      setState(() => _pushStatus = updated);
+      _showMessage(
+        updated == BrowserPushStatus.enabled
+            ? 'Browser notifications enabled.'
+            : updated == BrowserPushStatus.blocked
+            ? 'Notifications are blocked in this browser. Allow them in your browser settings to continue.'
+            : 'Browser notifications disabled.',
+      );
+    } on PushNotificationException catch (error) {
+      if (mounted) _showMessage(error.message);
+    } catch (_) {
+      if (mounted) {
+        _showMessage('Browser notifications could not be updated.');
+      }
+    } finally {
+      if (mounted) setState(() => _isUpdatingPush = false);
+    }
   }
 
   Future<void> _load() async {
@@ -2720,6 +2787,34 @@ class _ProfilePageState extends State<_ProfilePage> {
                       );
                       _preferencesDirty = true;
                     }),
+            ),
+            const Divider(),
+            ListTile(
+              contentPadding: EdgeInsets.zero,
+              leading: const Icon(Icons.notifications_active_outlined),
+              title: const Text('Browser notifications'),
+              subtitle: Text(switch (_pushStatus) {
+                BrowserPushStatus.enabled =>
+                  'On for this browser. Alerts follow the choices above.',
+                BrowserPushStatus.blocked => 'Blocked by this browser. Allow notifications in its site settings.',
+                BrowserPushStatus.notEnabled => 'Off for this browser. TrekIt will ask permission only when you enable it.',
+                BrowserPushStatus.unsupported => 'Not available in this browser. Your in-app inbox still works.',
+                null => 'Checking this browser…',
+              }),
+              trailing: _isUpdatingPush
+                  ? const SizedBox.square(
+                      dimension: 22,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : Switch(
+                      value: _pushStatus == BrowserPushStatus.enabled,
+                      onChanged:
+                          _pushStatus == null ||
+                              _pushStatus == BrowserPushStatus.unsupported ||
+                              _pushStatus == BrowserPushStatus.blocked
+                          ? null
+                          : (_) => _toggleBrowserPush(),
+                    ),
             ),
             FilledButton(
               onPressed: !_preferencesDirty || _isSaving

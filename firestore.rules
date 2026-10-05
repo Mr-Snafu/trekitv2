@@ -50,6 +50,13 @@ service cloud.firestore {
     //   readAt: timestamp (optional, the only client-editable field)
     // Notifications are created only by trusted Cloud Functions.
     //
+    // users/{uid}/pushDevices/{tokenHash}
+    //   token: string (required, server-only, 1-4096)
+    //   platform: string (required: web, android, or ios)
+    //   createdAt: timestamp (required, immutable)
+    //   updatedAt: timestamp (required)
+    // Push device registrations are private and server-only.
+    //
     // trips/{tripId}
     //   name: string (required, 1-100)
     //   description: string (required, 0-1000)
@@ -404,6 +411,10 @@ service cloud.firestore {
           'readAt' in request.resource.data &&
           isRecent(request.resource.data.readAt);
         allow delete: if isOwner(userId);
+      }
+
+      match /pushDevices/{tokenHash} {
+        allow read, write: if false;
       }
     }
 

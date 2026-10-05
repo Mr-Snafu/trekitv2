@@ -2,6 +2,7 @@ const {initializeApp} = require("firebase-admin/app");
 const {getAuth} = require("firebase-admin/auth");
 const {FieldValue, getFirestore, Timestamp} = require("firebase-admin/firestore");
 const {getStorage} = require("firebase-admin/storage");
+const {getMessaging} = require("firebase-admin/messaging");
 const {HttpsError, onCall, onRequest} = require("firebase-functions/v2/https");
 const {onDocumentCreated} = require("firebase-functions/v2/firestore");
 const crypto = require("node:crypto");
@@ -11,6 +12,7 @@ initializeApp();
 const db = getFirestore("trekit");
 const auth = getAuth();
 const storage = getStorage();
+const messaging = getMessaging();
 const options = {region: "us-central1", enforceAppCheck: false};
 const browserCors = [
   "http://127.0.0.1:7357",
@@ -181,7 +183,82 @@ async function createNotification({
     ...(tripId ? {tripId} : {}),
     createdAt: FieldValue.serverTimestamp(),
   });
+  await sendPushNotification({userRef, type, title, body, tripId});
 }
+
+async function sendPushNotification({userRef, type, title, body, tripId}) {
+  const devices = await userRef.collection("pushDevices").limit(20).get();
+  if (devices.empty) return;
+  const tokens = devices.docs
+      .map((device) => device.get("token"))
+      .filter((token) => typeof token === "string" && token.length > 0);
+  if (tokens.length === 0) return;
+
+  try {
+    const response = await messaging.sendEachForMulticast({
+      tokens,
+      notification: {title, body},
+      data: {
+        type,
+        ...(tripId ? {tripId} : {}),
+      },
+      webpush: {
+        notification: {
+          icon: "https://trekit.online/icons/Icon-192.png",
+          badge: "https://trekit.online/icons/Icon-192.png",
+        },
+        fcmOptions: {link: "https://trekit.online/"},
+      },
+    });
+    const invalidCodes = new Set([
+      "messaging/invalid-registration-token",
+      "messaging/registration-token-not-registered",
+    ]);
+    const cleanup = [];
+    response.responses.forEach((result, index) => {
+      if (!result.success && invalidCodes.has(result.error?.code)) {
+        cleanup.push(devices.docs[index].ref.delete());
+      }
+    });
+    await Promise.all(cleanup);
+  } catch (error) {
+    console.error("Push notification delivery failed", error);
+  }
+}
+
+function pushDeviceId(token) {
+  return crypto.createHash("sha256").update(token).digest("hex");
+}
+
+exports.registerPushDevice = onCall(options, async (request) => {
+  const userId = requireUser(request);
+  const token = requireString(request.data?.token, "Push token", 4096);
+  const platform = requireString(request.data?.platform, "Platform", 20);
+  if (!new Set(["web", "android", "ios"]).has(platform)) {
+    throw new HttpsError("invalid-argument", "Platform is invalid.");
+  }
+  const deviceRef = db.collection("users").doc(userId)
+      .collection("pushDevices").doc(pushDeviceId(token));
+  await db.runTransaction(async (transaction) => {
+    const existing = await transaction.get(deviceRef);
+    const now = FieldValue.serverTimestamp();
+    transaction.set(deviceRef, {
+      token,
+      platform,
+      updatedAt: now,
+      ...(!existing.exists ? {createdAt: now} : {}),
+    }, {merge: true});
+  });
+  return {registered: true};
+});
+
+exports.unregisterPushDevice = onCall(options, async (request) => {
+  const userId = requireUser(request);
+  const token = requireString(request.data?.token, "Push token", 4096);
+  await db.collection("users").doc(userId)
+      .collection("pushDevices").doc(pushDeviceId(token)).delete();
+  return {registered: false};
+});
 
 async function notifyTripMembers({
   tripId,
