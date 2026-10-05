@@ -75,7 +75,7 @@ class PushNotificationService {
     }
     final token = await _messaging.getToken(
       vapidKey: _vapidKey,
-      serviceWorkerScriptPath: 'firebase-messaging-sw.js',
+      serviceWorkerScriptPath: 'push/firebase-messaging-sw.js',
     );
     if (token != null) {
       await _call('unregisterPushDevice', {'token': token});
@@ -89,7 +89,7 @@ class PushNotificationService {
   Future<void> _registerCurrentToken() async {
     final token = await _messaging.getToken(
       vapidKey: _vapidKey,
-      serviceWorkerScriptPath: 'firebase-messaging-sw.js',
+      serviceWorkerScriptPath: 'push/firebase-messaging-sw.js',
     );
     if (token == null) {
       throw const PushNotificationException(

@@ -19,7 +19,7 @@ This document is the source of truth for TrekIt V2 development. TrekIt is a priv
 | Adventures | Organize owned and shared trips and open their journals | Live with lifecycle groups, cover images, search, filters, sorting, editing, deletion, sharing, entries, and photos |
 | Create | Start an adventure or capture content from anywhere | Live with adventure, journal-entry, photo-first memory, and Quick Snippet flows |
 | Circle | Manage trusted connections, requests, blocking, and TrekIt IDs | Live with private IDs, real invite links and QR codes, requests, cooldowns, remove, block, and unblock controls |
-| Profile | Identity, verification, settings, privacy, export, and account controls | Live with editable identity, saved preferences, JSON export, help/legal summaries, and account controls |
+| Profile | Identity, verification, settings, privacy, export, installation, and account controls | Live with editable identity, saved preferences, install guidance, JSON export, help/legal summaries, and account controls |
 
 ## Planned product capabilities
 
@@ -73,5 +73,6 @@ This document is the source of truth for TrekIt V2 development. TrekIt is a priv
 11. Add opt-in browser push delivery backed by private, server-managed device registrations. *(Live)*
 12. Route Circle and adventure notifications directly to their private in-app destination. *(Live)*
 13. Replace the Circle invite placeholder with real links, QR codes, and safe sign-in handoff. *(Live)*
+14. Polish the mobile web app for installation while keeping push and offline app caching on separate service-worker scopes. *(Live)*
 
 Every phase should be checked against this blueprint, tested at mobile width, deployed through a preview, verified against the live build, and backed up to GitHub.

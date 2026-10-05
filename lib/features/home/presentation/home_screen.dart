@@ -9,6 +9,7 @@ import 'package:image_picker/image_picker.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
 import '../../../core/drafts/local_draft_store.dart';
+import '../../../core/install/app_install_service.dart';
 import '../../../core/time/friendly_time.dart';
 import '../../auth/data/auth_service.dart';
 import '../../circle/data/circle_repository.dart';
@@ -2584,13 +2585,16 @@ class _ProfilePage extends StatefulWidget {
 }
 
 class _ProfilePageState extends State<_ProfilePage> {
+  final _installService = AppInstallService();
   ProfileState? _profile;
   String? _error;
   bool _isLoading = true;
   bool _isSaving = false;
   bool _isExporting = false;
+  bool _isInstalling = false;
   bool _isUpdatingPush = false;
   bool _preferencesDirty = false;
+  AppInstallAvailability? _installAvailability;
   BrowserPushStatus? _pushStatus;
 
   @override
@@ -2598,6 +2602,42 @@ class _ProfilePageState extends State<_ProfilePage> {
     super.initState();
     _load();
     _loadPushStatus();
+    _loadInstallAvailability();
+  }
+
+  Future<void> _loadInstallAvailability() async {
+    final availability = await _installService.getAvailability();
+    if (mounted) setState(() => _installAvailability = availability);
+  }
+
+  Future<void> _installApp() async {
+    final availability = await _installService.getAvailability();
+    if (mounted) setState(() => _installAvailability = availability);
+    if (availability == AppInstallAvailability.instructions) {
+      _showInformation(
+        'Install TrekIt',
+        'On iPhone or iPad: open TrekIt in Safari, tap the Share button, then choose “Add to Home Screen.”\n\nOn a desktop browser: open the browser menu and choose “Install TrekIt” or “Create shortcut.”',
+      );
+      return;
+    }
+    if (availability != AppInstallAvailability.available) return;
+    setState(() => _isInstalling = true);
+    try {
+      final accepted = await _installService.install();
+      if (!mounted) return;
+      await _loadInstallAvailability();
+      if (mounted) {
+        _showMessage(
+          accepted
+              ? 'TrekIt was added to this device.'
+              : 'Installation was not completed.',
+        );
+      }
+    } catch (_) {
+      if (mounted) _showMessage('TrekIt could not be installed right now.');
+    } finally {
+      if (mounted) setState(() => _isInstalling = false);
+    }
   }
 
   Future<void> _loadPushStatus() async {
@@ -3015,6 +3055,44 @@ class _ProfilePageState extends State<_ProfilePage> {
     return Card(
       child: Column(
         children: [
+          if (_installAvailability != null &&
+              _installAvailability != AppInstallAvailability.unsupported) ...[
+            ListTile(
+              leading: Icon(
+                _installAvailability == AppInstallAvailability.installed
+                    ? Icons.check_circle_outline
+                    : Icons.install_mobile_outlined,
+              ),
+              title: Text(
+                _installAvailability == AppInstallAvailability.installed
+                    ? 'TrekIt is installed'
+                    : 'Install TrekIt',
+              ),
+              subtitle: Text(switch (_installAvailability) {
+                AppInstallAvailability.available =>
+                  'Add TrekIt to this device for a full-screen app experience.',
+                AppInstallAvailability.instructions =>
+                  'See the steps for adding TrekIt to this device.',
+                AppInstallAvailability.installed =>
+                  'You are using the standalone app experience.',
+                _ => '',
+              }),
+              trailing: _isInstalling
+                  ? const SizedBox.square(
+                      dimension: 20,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : _installAvailability == AppInstallAvailability.installed
+                  ? null
+                  : const Icon(Icons.chevron_right),
+              onTap:
+                  _isInstalling ||
+                      _installAvailability == AppInstallAvailability.installed
+                  ? null
+                  : _installApp,
+            ),
+            const Divider(height: 1),
+          ],
           ListTile(
             leading: const Icon(Icons.download_outlined),
             title: const Text('Download my data'),

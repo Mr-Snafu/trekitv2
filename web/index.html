@@ -35,6 +35,34 @@
   <link rel="manifest" href="manifest.json">
 </head>
 <body>
+  <script>
+    // Preserve the browser's one-time install prompt until the user chooses
+    // Install from TrekIt's Profile page.
+    window.trekitDeferredInstallPrompt = null;
+    window.trekitWasInstalled = false;
+    window.trekitCanInstall = () => window.trekitDeferredInstallPrompt !== null;
+    window.trekitIsStandalone = () =>
+      window.matchMedia('(display-mode: standalone)').matches ||
+      window.navigator.standalone === true ||
+      window.trekitWasInstalled;
+    window.trekitPromptInstall = async () => {
+      const prompt = window.trekitDeferredInstallPrompt;
+      if (!prompt) return false;
+      prompt.prompt();
+      const choice = await prompt.userChoice;
+      window.trekitDeferredInstallPrompt = null;
+      window.trekitWasInstalled = choice.outcome === 'accepted';
+      return choice.outcome === 'accepted';
+    };
+    window.addEventListener('beforeinstallprompt', (event) => {
+      event.preventDefault();
+      window.trekitDeferredInstallPrompt = event;
+    });
+    window.addEventListener('appinstalled', () => {
+      window.trekitDeferredInstallPrompt = null;
+      window.trekitWasInstalled = true;
+    });
+  </script>
   <!--
     You can customize the "flutter_bootstrap.js" script.
     This is useful to provide a custom configuration to the Flutter loader
