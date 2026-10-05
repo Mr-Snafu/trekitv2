@@ -6,6 +6,7 @@ const {getMessaging} = require("firebase-admin/messaging");
 const {HttpsError, onCall, onRequest} = require("firebase-functions/v2/https");
 const {onDocumentCreated} = require("firebase-functions/v2/firestore");
 const crypto = require("node:crypto");
+const {URL} = require("node:url");
 
 initializeApp();
 
@@ -193,6 +194,9 @@ async function sendPushNotification({userRef, type, title, body, tripId}) {
       .map((device) => device.get("token"))
       .filter((token) => typeof token === "string" && token.length > 0);
   if (tokens.length === 0) return;
+  const link = new URL("https://trekit.online/");
+  link.searchParams.set("notificationType", type);
+  if (tripId) link.searchParams.set("tripId", tripId);
 
   try {
     const response = await messaging.sendEachForMulticast({
@@ -207,7 +211,7 @@ async function sendPushNotification({userRef, type, title, body, tripId}) {
           icon: "https://trekit.online/icons/Icon-192.png",
           badge: "https://trekit.online/icons/Icon-192.png",
         },
-        fcmOptions: {link: "https://trekit.online/"},
+        fcmOptions: {link: link.toString()},
       },
     });
     const invalidCodes = new Set([

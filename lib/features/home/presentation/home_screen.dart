@@ -16,6 +16,7 @@ import '../../../core/download/download_file.dart';
 import '../../notifications/data/notification_repository.dart';
 import '../../notifications/data/push_notification_service.dart';
 import '../../notifications/domain/app_notification.dart';
+import '../../notifications/domain/notification_destination.dart';
 import '../../profile/data/profile_repository.dart';
 import '../../profile/domain/profile_state.dart';
 import '../../trips/data/quick_snippet_queue.dart';
@@ -45,6 +46,9 @@ class _HomeScreenState extends State<HomeScreen> {
   late final PushNotificationService _pushNotificationService =
       PushNotificationService();
   StreamSubscription<RemoteMessage>? _foregroundMessageSubscription;
+  NotificationDestination? _pendingNotificationDestination =
+      NotificationDestination.fromUri(Uri.base);
+  bool _isOpeningNotificationDestination = false;
   final _searchController = TextEditingController();
   final Set<String> _busyTripIds = <String>{};
   List<Trip> _latestTrips = const [];
@@ -82,11 +86,69 @@ class _HomeScreenState extends State<HomeScreen> {
             if (!mounted) return;
             final title = message.notification?.title ?? 'TrekIt update';
             final body = message.notification?.body;
-            _showMessage(body == null ? title : '$title — $body');
+            final destination = NotificationDestination.fromMessageData(
+              message.data,
+            );
+            ScaffoldMessenger.of(context)
+              ..hideCurrentSnackBar()
+              ..showSnackBar(
+                SnackBar(
+                  content: Text(body == null ? title : '$title — $body'),
+                  action: destination.isActionable
+                      ? SnackBarAction(
+                          label: 'Open',
+                          onPressed: () => unawaited(
+                            _openNotificationDestination(destination),
+                          ),
+                        )
+                      : null,
+                ),
+              );
           });
     } catch (_) {
       // Push is optional; the private in-app inbox remains available.
     }
+  }
+
+  Future<void> _openNotificationDestination(
+    NotificationDestination destination,
+  ) async {
+    if (!mounted) return;
+    if (destination.kind == NotificationDestinationKind.circle) {
+      setState(() => _selectedIndex = 3);
+      return;
+    }
+    final trip = _latestTrips
+        .where((item) => item.id == destination.tripId)
+        .firstOrNull;
+    if (trip == null) {
+      _showMessage('That adventure is no longer available to this account.');
+      return;
+    }
+    await _openTrip(trip);
+  }
+
+  void _schedulePendingNotificationDestination({
+    required List<Trip> trips,
+    required bool tripsLoaded,
+  }) {
+    final destination = _pendingNotificationDestination;
+    if (destination == null ||
+        !destination.isActionable ||
+        _isOpeningNotificationDestination) {
+      return;
+    }
+    if (destination.kind == NotificationDestinationKind.adventure &&
+        !tripsLoaded &&
+        !trips.any((trip) => trip.id == destination.tripId)) {
+      return;
+    }
+    _pendingNotificationDestination = null;
+    _isOpeningNotificationDestination = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      await _openNotificationDestination(destination);
+      _isOpeningNotificationDestination = false;
+    });
   }
 
   void _clearOrganizationControls() {
@@ -842,6 +904,10 @@ class _HomeScreenState extends State<HomeScreen> {
         builder: (context, snapshot) {
           final trips = snapshot.data ?? _latestTrips;
           _latestTrips = trips;
+          _schedulePendingNotificationDestination(
+            trips: trips,
+            tripsLoaded: snapshot.connectionState != ConnectionState.waiting,
+          );
 
           return switch (_selectedIndex) {
             0 => _FeedPage(
@@ -855,6 +921,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   trips.isEmpty,
               error: snapshot.error,
               onOpenTrip: _openTrip,
+              onOpenCircle: () => setState(() => _selectedIndex = 3),
               onCreate: _showCreateMenu,
             ),
             1 => _buildAdventuresPage(context),
@@ -1141,6 +1208,7 @@ class _FeedPage extends StatefulWidget {
     required this.isLoading,
     required this.error,
     required this.onOpenTrip,
+    required this.onOpenCircle,
     required this.onCreate,
   });
 
@@ -1151,6 +1219,7 @@ class _FeedPage extends StatefulWidget {
   final bool isLoading;
   final Object? error;
   final ValueChanged<Trip> onOpenTrip;
+  final VoidCallback onOpenCircle;
   final VoidCallback onCreate;
 
   @override
@@ -1333,6 +1402,7 @@ class _FeedPageState extends State<_FeedPage> {
         userId: widget.userId,
         trips: widget.trips,
         onOpenTrip: widget.onOpenTrip,
+        onOpenCircle: widget.onOpenCircle,
       ),
     );
   }
@@ -1796,12 +1866,14 @@ class _NotificationInbox extends StatelessWidget {
     required this.userId,
     required this.trips,
     required this.onOpenTrip,
+    required this.onOpenCircle,
   });
 
   final NotificationRepository repository;
   final String userId;
   final List<Trip> trips;
   final ValueChanged<Trip> onOpenTrip;
+  final VoidCallback onOpenCircle;
 
   IconData _iconFor(String type) => switch (type) {
     'circleRequest' => Icons.group_add_outlined,
@@ -1815,6 +1887,11 @@ class _NotificationInbox extends StatelessWidget {
   Future<void> _open(BuildContext context, AppNotification notification) async {
     if (notification.isUnread) {
       await repository.markRead(userId, notification.id);
+    }
+    if (notification.type == 'circleRequest' && context.mounted) {
+      Navigator.of(context).pop();
+      onOpenCircle();
+      return;
     }
     final trip = trips
         .where((item) => item.id == notification.tripId)
