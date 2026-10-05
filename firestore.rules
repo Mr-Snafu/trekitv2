@@ -41,6 +41,15 @@ service cloud.firestore {
     //   retryAfter: timestamp (optional)
     // All Circle documents are written only by authenticated Cloud Functions.
     //
+    // users/{uid}/notifications/{notificationId}
+    //   type: string (required, immutable, enum)
+    //   title: string (required, immutable, 1-80)
+    //   body: string (required, immutable, 1-240)
+    //   tripId: string (optional, immutable, <= 128)
+    //   createdAt: timestamp (required, immutable)
+    //   readAt: timestamp (optional, the only client-editable field)
+    // Notifications are created only by trusted Cloud Functions.
+    //
     // trips/{tripId}
     //   name: string (required, 1-100)
     //   description: string (required, 0-1000)
@@ -144,6 +153,27 @@ service cloud.firestore {
           data.allowCircleRequests is bool) &&
         data.createdAt is timestamp &&
         data.updatedAt is timestamp;
+    }
+
+    function isValidNotification(data) {
+      return hasRequiredFields(data, ['type', 'title', 'body', 'createdAt']) &&
+        hasOnlyAllowedFields(data, [
+          'type', 'title', 'body', 'tripId', 'createdAt', 'readAt'
+        ]) &&
+        data.type is string &&
+        data.type in [
+          'circleRequest', 'adventureEntry', 'adventureComment',
+          'quickSnippet', 'adventureShared'
+        ] &&
+        data.title is string &&
+        data.title.size() > 0 &&
+        data.title.size() <= 80 &&
+        data.body is string &&
+        data.body.size() > 0 &&
+        data.body.size() <= 240 &&
+        (!('tripId' in data) || isValidId(data.tripId)) &&
+        data.createdAt is timestamp &&
+        (!('readAt' in data) || data.readAt is timestamp);
     }
 
     function isValidTripCoverPath(data, tripId) {
@@ -362,6 +392,18 @@ service cloud.firestore {
       match /blocked/{otherUserId} {
         allow read: if isOwner(userId);
         allow write: if false;
+      }
+
+      match /notifications/{notificationId} {
+        allow read: if isOwner(userId);
+        allow create: if false;
+        allow update: if isOwner(userId) &&
+          isValidNotification(request.resource.data) &&
+          request.resource.data.diff(resource.data).affectedKeys()
+            .hasOnly(['readAt']) &&
+          'readAt' in request.resource.data &&
+          isRecent(request.resource.data.readAt);
+        allow delete: if isOwner(userId);
       }
     }
 

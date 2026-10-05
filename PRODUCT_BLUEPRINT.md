@@ -15,7 +15,7 @@ This document is the source of truth for TrekIt V2 development. TrekIt is a priv
 
 | Area | Purpose | Current status |
 | --- | --- | --- |
-| Feed | Private, newest-first activity from accessible adventures | Live with adventure, journal-entry, photo, comment, sharing, and Quick Snippet activity plus a local retry queue |
+| Feed | Private, newest-first activity from accessible adventures | Live with activity grouping, notification inbox, and a local Quick Snippet retry queue |
 | Adventures | Organize owned and shared trips and open their journals | Live with lifecycle groups, cover images, search, filters, sorting, editing, deletion, sharing, entries, and photos |
 | Create | Start an adventure or capture content from anywhere | Live with adventure, journal-entry, photo-first memory, and Quick Snippet flows |
 | Circle | Manage trusted connections, requests, blocking, and TrekIt IDs | Live with private IDs, requests, cooldowns, remove, block, and unblock controls |
@@ -53,7 +53,7 @@ This document is the source of truth for TrekIt V2 development. TrekIt is a priv
 ### Profile
 
 - Editable display identity and profile details are live.
-- Account, notification, privacy, sharing, help, and legal controls are centralized in Profile.
+- Account, notification, privacy, sharing, help, and legal controls are centralized in Profile. Notification preferences now control server-generated Circle and adventure inbox delivery. *(Live)*
 - Personal JSON data export is live.
 - Retain secure account deletion and reauthentication behavior.
 
@@ -68,5 +68,6 @@ This document is the source of truth for TrekIt V2 development. TrekIt is a priv
 7. Expand the central Create hub with destination-aware photo and Quick Snippet flows. *(Live)*
 8. Polish Feed readability with friendly time labels, day grouping, and richer event context. *(Live)*
 9. Add account-scoped local draft recovery for adventure and journal creation. *(Live)*
+10. Deliver preference-aware Circle and adventure notifications through a private real-time inbox. *(Live)*
 
 Every phase should be checked against this blueprint, tested at mobile width, deployed through a preview, verified against the live build, and backed up to GitHub.

@@ -12,6 +12,8 @@ import '../../auth/data/auth_service.dart';
 import '../../circle/data/circle_repository.dart';
 import '../../circle/domain/circle_state.dart';
 import '../../../core/download/download_file.dart';
+import '../../notifications/data/notification_repository.dart';
+import '../../notifications/domain/app_notification.dart';
 import '../../profile/data/profile_repository.dart';
 import '../../profile/domain/profile_state.dart';
 import '../../trips/data/quick_snippet_queue.dart';
@@ -36,6 +38,8 @@ class _HomeScreenState extends State<HomeScreen> {
   late final TripRepository _repository = TripRepository();
   late final CircleRepository _circleRepository = CircleRepository();
   late final ProfileRepository _profileRepository = ProfileRepository();
+  late final NotificationRepository _notificationRepository =
+      NotificationRepository();
   final _searchController = TextEditingController();
   final Set<String> _busyTripIds = <String>{};
   List<Trip> _latestTrips = const [];
@@ -819,6 +823,7 @@ class _HomeScreenState extends State<HomeScreen> {
             0 => _FeedPage(
               key: ValueKey('feed-$_feedRevision'),
               repository: _repository,
+              notificationRepository: _notificationRepository,
               userId: widget.user.uid,
               trips: trips,
               isLoading:
@@ -1105,6 +1110,7 @@ class _FeedPage extends StatefulWidget {
   const _FeedPage({
     super.key,
     required this.repository,
+    required this.notificationRepository,
     required this.userId,
     required this.trips,
     required this.isLoading,
@@ -1114,6 +1120,7 @@ class _FeedPage extends StatefulWidget {
   });
 
   final TripRepository repository;
+  final NotificationRepository notificationRepository;
   final String userId;
   final List<Trip> trips;
   final bool isLoading;
@@ -1291,6 +1298,20 @@ class _FeedPageState extends State<_FeedPage> {
       ..showSnackBar(SnackBar(content: Text(message)));
   }
 
+  Future<void> _showNotifications() async {
+    await showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      isScrollControlled: true,
+      builder: (_) => _NotificationInbox(
+        repository: widget.notificationRepository,
+        userId: widget.userId,
+        trips: widget.trips,
+        onOpenTrip: widget.onOpenTrip,
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -1305,6 +1326,34 @@ class _FeedPageState extends State<_FeedPage> {
             const Text('TrekIt'),
           ],
         ),
+        actions: [
+          StreamBuilder<List<AppNotification>>(
+            stream: widget.notificationRepository.watchNotifications(
+              widget.userId,
+            ),
+            builder: (context, snapshot) {
+              final unread = (snapshot.data ?? const <AppNotification>[])
+                  .where((item) => item.isUnread)
+                  .length;
+              return IconButton(
+                tooltip: unread == 0
+                    ? 'Notifications'
+                    : '$unread unread notifications',
+                onPressed: _showNotifications,
+                icon: Badge(
+                  isLabelVisible: unread > 0,
+                  label: Text(unread > 99 ? '99+' : '$unread'),
+                  child: Icon(
+                    unread > 0
+                        ? Icons.notifications
+                        : Icons.notifications_outlined,
+                  ),
+                ),
+              );
+            },
+          ),
+          const SizedBox(width: 6),
+        ],
       ),
       body: SafeArea(
         child: widget.isLoading
@@ -1711,6 +1760,150 @@ class _ActivityCard extends StatelessWidget {
             ],
           ),
         ),
+      ),
+    );
+  }
+}
+
+class _NotificationInbox extends StatelessWidget {
+  const _NotificationInbox({
+    required this.repository,
+    required this.userId,
+    required this.trips,
+    required this.onOpenTrip,
+  });
+
+  final NotificationRepository repository;
+  final String userId;
+  final List<Trip> trips;
+  final ValueChanged<Trip> onOpenTrip;
+
+  IconData _iconFor(String type) => switch (type) {
+    'circleRequest' => Icons.group_add_outlined,
+    'adventureEntry' => Icons.auto_stories_outlined,
+    'adventureComment' => Icons.mode_comment_outlined,
+    'quickSnippet' => Icons.bolt_outlined,
+    'adventureShared' => Icons.landscape_outlined,
+    _ => Icons.notifications_outlined,
+  };
+
+  Future<void> _open(BuildContext context, AppNotification notification) async {
+    if (notification.isUnread) {
+      await repository.markRead(userId, notification.id);
+    }
+    final trip = trips
+        .where((item) => item.id == notification.tripId)
+        .firstOrNull;
+    if (trip != null && context.mounted) {
+      Navigator.of(context).pop();
+      onOpenTrip(trip);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      height: MediaQuery.sizeOf(context).height * 0.78,
+      child: StreamBuilder<List<AppNotification>>(
+        stream: repository.watchNotifications(userId),
+        builder: (context, snapshot) {
+          final notifications = snapshot.data ?? const <AppNotification>[];
+          final unread = notifications.where((item) => item.isUnread).length;
+          return Column(
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 0, 12, 12),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        'Notifications',
+                        style: Theme.of(context).textTheme.headlineSmall,
+                      ),
+                    ),
+                    TextButton(
+                      onPressed: unread == 0
+                          ? null
+                          : () => repository.markAllRead(userId, notifications),
+                      child: const Text('Mark all read'),
+                    ),
+                  ],
+                ),
+              ),
+              const Divider(height: 1),
+              Expanded(
+                child: snapshot.connectionState == ConnectionState.waiting
+                    ? const Center(child: CircularProgressIndicator())
+                    : snapshot.hasError
+                    ? const _InlineMessage(
+                        icon: Icons.cloud_off_outlined,
+                        title: 'Notifications are unavailable',
+                        message: 'Check your connection and try again.',
+                      )
+                    : notifications.isEmpty
+                    ? const _InlineMessage(
+                        icon: Icons.notifications_none_outlined,
+                        title: 'You’re all caught up',
+                        message: 'Circle requests and shared-adventure activity will appear here.',
+                      )
+                    : ListView.separated(
+                        padding: const EdgeInsets.fromLTRB(12, 8, 12, 32),
+                        itemCount: notifications.length,
+                        separatorBuilder: (_, _) => const Divider(height: 1),
+                        itemBuilder: (context, index) {
+                          final notification = notifications[index];
+                          final trip = trips
+                              .where((item) => item.id == notification.tripId)
+                              .firstOrNull;
+                          return ListTile(
+                            tileColor: notification.isUnread
+                                ? Theme.of(context).colorScheme.primaryContainer
+                                      .withValues(alpha: 0.35)
+                                : null,
+                            leading: CircleAvatar(
+                              child: Icon(_iconFor(notification.type)),
+                            ),
+                            title: Text(
+                              notification.title,
+                              style: notification.isUnread
+                                  ? const TextStyle(fontWeight: FontWeight.w800)
+                                  : null,
+                            ),
+                            subtitle: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(notification.body),
+                                if (trip != null)
+                                  Text(
+                                    trip.name,
+                                    style: TextStyle(
+                                      color: Theme.of(context)
+                                          .colorScheme
+                                          .primary,
+                                      fontWeight: FontWeight.w700,
+                                    ),
+                                  ),
+                                Text(
+                                  MaterialLocalizations.of(context)
+                                      .formatMediumDate(notification.createdAt),
+                                ),
+                              ],
+                            ),
+                            isThreeLine: true,
+                            onTap: () => _open(context, notification),
+                            trailing: IconButton(
+                              tooltip: 'Dismiss notification',
+                              onPressed: () =>
+                                  repository.dismiss(userId, notification.id),
+                              icon: const Icon(Icons.close),
+                            ),
+                          );
+                        },
+                      ),
+              ),
+            ],
+          );
+        },
       ),
     );
   }
@@ -2502,7 +2695,7 @@ class _ProfilePageState extends State<_ProfilePage> {
             ),
             const SizedBox(height: 6),
             const Text(
-              'These choices are saved now and will control notification delivery as channels are enabled.',
+              'These choices control the private notification inbox available from the Feed bell.',
             ),
             SwitchListTile(
               contentPadding: EdgeInsets.zero,

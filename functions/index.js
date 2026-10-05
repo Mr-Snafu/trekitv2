@@ -3,6 +3,7 @@ const {getAuth} = require("firebase-admin/auth");
 const {FieldValue, getFirestore, Timestamp} = require("firebase-admin/firestore");
 const {getStorage} = require("firebase-admin/storage");
 const {HttpsError, onCall, onRequest} = require("firebase-functions/v2/https");
+const {onDocumentCreated} = require("firebase-functions/v2/firestore");
 const crypto = require("node:crypto");
 
 initializeApp();
@@ -24,6 +25,11 @@ const accountOptions = {
   timeoutSeconds: 540,
   memory: "512MiB",
 };
+const firestoreEventOptions = (document) => ({
+  document,
+  database: "trekit",
+  region: "us-central1",
+});
 
 function requireUser(request) {
   if (!request.auth) {
@@ -156,6 +162,141 @@ function profileResult(user, data = {}) {
   };
 }
 
+async function createNotification({
+  userId,
+  notificationId,
+  preference,
+  type,
+  title,
+  body,
+  tripId,
+}) {
+  const userRef = db.collection("users").doc(userId);
+  const profile = await userRef.get();
+  if (!profile.exists || profile.get(preference) === false) return;
+  await userRef.collection("notifications").doc(notificationId).set({
+    type,
+    title,
+    body,
+    ...(tripId ? {tripId} : {}),
+    createdAt: FieldValue.serverTimestamp(),
+  });
+}
+
+async function notifyTripMembers({
+  tripId,
+  eventId,
+  actorId,
+  type,
+  title,
+  body,
+}) {
+  const tripRef = db.collection("trips").doc(tripId);
+  const [trip, members] = await Promise.all([
+    tripRef.get(),
+    tripRef.collection("members").limit(100).get(),
+  ]);
+  if (!trip.exists) return;
+  const recipients = new Set([
+    trip.get("ownerId"),
+    ...members.docs.map((member) => member.get("userId")),
+  ]);
+  recipients.delete(actorId);
+  await Promise.all([...recipients].map((userId) => createNotification({
+    userId,
+    notificationId: `${type}-${tripId}-${eventId}`,
+    preference: "notifyAdventureActivity",
+    type,
+    title,
+    body,
+    tripId,
+  })));
+}
+
+exports.notifyCircleRequest = onDocumentCreated(
+    firestoreEventOptions(
+        "users/{userId}/incomingRequests/{otherUserId}"),
+    async (event) => {
+      const data = event.data?.data();
+      if (!data) return;
+      const displayName = typeof data.displayName === "string" ?
+        data.displayName.slice(0, 80) : "Someone";
+      await createNotification({
+        userId: event.params.userId,
+        notificationId: `circleRequest-${event.params.otherUserId}`,
+        preference: "notifyCircleRequests",
+        type: "circleRequest",
+        title: "New Circle request",
+        body: `${displayName} wants to join your Circle.`,
+      });
+    },
+);
+
+exports.notifyAdventureEntry = onDocumentCreated(
+    firestoreEventOptions("trips/{tripId}/entries/{entryId}"),
+    async (event) => {
+      const data = event.data?.data();
+      if (!data) return;
+      await notifyTripMembers({
+        tripId: event.params.tripId,
+        eventId: event.params.entryId,
+        actorId: data.authorId,
+        type: "adventureEntry",
+        title: "New journal entry",
+        body: "A new memory was added to a shared adventure.",
+      });
+    },
+);
+
+exports.notifyAdventureComment = onDocumentCreated(
+    firestoreEventOptions("trips/{tripId}/comments/{commentId}"),
+    async (event) => {
+      const data = event.data?.data();
+      if (!data) return;
+      await notifyTripMembers({
+        tripId: event.params.tripId,
+        eventId: event.params.commentId,
+        actorId: data.authorId,
+        type: "adventureComment",
+        title: "New comment",
+        body: "A discussion was updated in a shared adventure.",
+      });
+    },
+);
+
+exports.notifyQuickSnippet = onDocumentCreated(
+    firestoreEventOptions("trips/{tripId}/snippets/{snippetId}"),
+    async (event) => {
+      const data = event.data?.data();
+      if (!data) return;
+      await notifyTripMembers({
+        tripId: event.params.tripId,
+        eventId: event.params.snippetId,
+        actorId: data.authorId,
+        type: "quickSnippet",
+        title: "New Quick Snippet",
+        body: "A new moment was captured in a shared adventure.",
+      });
+    },
+);
+
+exports.notifyAdventureShared = onDocumentCreated(
+    firestoreEventOptions("trips/{tripId}/members/{memberId}"),
+    async (event) => {
+      const data = event.data?.data();
+      if (!data || data.role === "owner") return;
+      await createNotification({
+        userId: event.params.memberId,
+        notificationId: `adventureShared-${event.params.tripId}`,
+        preference: "notifyAdventureActivity",
+        type: "adventureShared",
+        title: "Adventure shared with you",
+        body: "You now have access to a private adventure.",
+        tripId: event.params.tripId,
+      });
+    },
+);
+
 exports.getProfileState = onCall(options, async (request) => {
   const userId = requireUser(request);
   const [user, profile] = await Promise.all([
@@ -255,7 +396,8 @@ exports.exportMyData = onCall(options, async (request) => {
   const limit = 500;
   const userRef = db.collection("users").doc(userId);
   const [user, profile, circleProfile, ownedTrips, entries, snippets, comments,
-    memberships, circle, incoming, outgoing, blocked] = await Promise.all([
+    memberships, notifications, circle, incoming, outgoing, blocked] =
+    await Promise.all([
     auth.getUser(userId),
     userRef.get(),
     db.collection("circleProfiles").doc(userId).get(),
@@ -268,6 +410,7 @@ exports.exportMyData = onCall(options, async (request) => {
         .limit(limit + 1).get(),
     db.collectionGroup("members").where("userId", "==", userId)
         .limit(limit + 1).get(),
+    userRef.collection("notifications").limit(limit + 1).get(),
     userRef.collection("circle").limit(100).get(),
     userRef.collection("incomingRequests").limit(100).get(),
     userRef.collection("outgoingRequests").limit(100).get(),
@@ -292,6 +435,7 @@ exports.exportMyData = onCall(options, async (request) => {
     authoredSnippets: exportDocuments(snippets, limit),
     authoredComments: exportDocuments(comments, limit),
     adventureMemberships: exportDocuments(memberships, limit),
+    notifications: exportDocuments(notifications, limit),
     circle: exportDocuments(circle, 100),
     incomingCircleRequests: exportDocuments(incoming, 100),
     outgoingCircleRequests: exportDocuments(outgoing, 100),
@@ -302,6 +446,7 @@ exports.exportMyData = onCall(options, async (request) => {
       authoredSnippets: snippets.size > limit,
       authoredComments: comments.size > limit,
       adventureMemberships: memberships.size > limit,
+      notifications: notifications.size > limit,
     },
   };
 });
