@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:firebase_auth/firebase_auth.dart';
@@ -5,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
 
+import '../../../core/drafts/local_draft_store.dart';
 import '../../../core/time/friendly_time.dart';
 import '../../auth/data/auth_service.dart';
 import '../../circle/data/circle_repository.dart';
@@ -155,7 +157,8 @@ class _HomeScreenState extends State<HomeScreen> {
   Future<void> _createTrip() async {
     final draft = await showDialog<_TripDraft>(
       context: context,
-      builder: (_) => _TripDialog(repository: _repository),
+      builder: (_) =>
+          _TripDialog(repository: _repository, userId: widget.user.uid),
     );
     if (draft == null || !mounted) {
       return;
@@ -174,6 +177,7 @@ class _HomeScreenState extends State<HomeScreen> {
         coverImageBytes: draft.coverImageBytes,
         coverContentType: draft.coverContentType,
       );
+      await LocalDraftStore().clearAdventure(widget.user.uid);
       if (mounted) {
         _showMessage('Trip created.');
       }
@@ -393,7 +397,11 @@ class _HomeScreenState extends State<HomeScreen> {
   Future<void> _editTrip(Trip trip) async {
     final draft = await showDialog<_TripDraft>(
       context: context,
-      builder: (_) => _TripDialog(repository: _repository, trip: trip),
+      builder: (_) => _TripDialog(
+        repository: _repository,
+        userId: widget.user.uid,
+        trip: trip,
+      ),
     );
     if (draft == null || !mounted) {
       return;
@@ -3142,9 +3150,14 @@ class _TripDraft {
 enum _TripAction { edit, delete }
 
 class _TripDialog extends StatefulWidget {
-  const _TripDialog({required this.repository, this.trip});
+  const _TripDialog({
+    required this.repository,
+    required this.userId,
+    this.trip,
+  });
 
   final TripRepository repository;
+  final String userId;
   final Trip? trip;
 
   @override
@@ -3153,6 +3166,7 @@ class _TripDialog extends StatefulWidget {
 
 class _TripDialogState extends State<_TripDialog> {
   final _formKey = GlobalKey<FormState>();
+  final _draftStore = LocalDraftStore();
   late final _nameController = TextEditingController(text: widget.trip?.name);
   late final _descriptionController = TextEditingController(
     text: widget.trip?.description,
@@ -3168,6 +3182,81 @@ class _TripDialogState extends State<_TripDialog> {
   String? _coverContentType;
   bool _removeCover = false;
   bool _isPickingCover = false;
+  Timer? _draftTimer;
+  bool _isLoadingDraft = false;
+  bool _draftRestored = false;
+  bool _draftSaved = false;
+  bool _photoNeedsReselection = false;
+  bool _draftDiscarded = false;
+
+  bool get _usesLocalDraft => widget.trip == null;
+
+  @override
+  void initState() {
+    super.initState();
+    if (_usesLocalDraft) {
+      _isLoadingDraft = true;
+      _restoreDraft();
+    }
+  }
+
+  Future<void> _restoreDraft() async {
+    final draft = await _draftStore.loadAdventure(widget.userId);
+    if (!mounted) return;
+    if (draft != null && !draft.isEmpty) {
+      _nameController.text = draft.name;
+      _descriptionController.text = draft.description;
+      _locationController.text = draft.location;
+      _startDate = draft.startDate;
+      _endDate = draft.endDate;
+      _status =
+          TripStatus.values
+              .where((status) => status.name == draft.status)
+              .firstOrNull ??
+          TripStatus.draft;
+      _draftRestored = true;
+      _draftSaved = true;
+      _photoNeedsReselection = draft.hadPhoto;
+    }
+    _nameController.addListener(_scheduleDraftSave);
+    _descriptionController.addListener(_scheduleDraftSave);
+    _locationController.addListener(_scheduleDraftSave);
+    setState(() => _isLoadingDraft = false);
+  }
+
+  void _scheduleDraftSave() {
+    if (!_usesLocalDraft || _draftDiscarded || _isLoadingDraft) return;
+    _draftTimer?.cancel();
+    if (mounted) setState(() => _draftSaved = false);
+    _draftTimer = Timer(const Duration(milliseconds: 500), _persistDraft);
+  }
+
+  Future<void> _persistDraft({bool updateState = true}) async {
+    if (!_usesLocalDraft || _draftDiscarded) return;
+    final draft = AdventureFormDraft(
+      name: _nameController.text,
+      description: _descriptionController.text,
+      location: _locationController.text,
+      status: _status.name,
+      startDate: _startDate,
+      endDate: _endDate,
+      hadPhoto: _coverImageBytes != null || _photoNeedsReselection,
+      updatedAt: DateTime.now(),
+    );
+    if (draft.isEmpty) {
+      await _draftStore.clearAdventure(widget.userId);
+    } else {
+      await _draftStore.saveAdventure(widget.userId, draft);
+    }
+    if (updateState && mounted) setState(() => _draftSaved = !draft.isEmpty);
+  }
+
+  Future<void> _discardDraft() async {
+    _draftTimer?.cancel();
+    _draftDiscarded = true;
+    await _draftStore.clearAdventure(widget.userId);
+    if (mounted) Navigator.of(context).pop();
+  }
 
   Future<void> _pickCover() async {
     setState(() => _isPickingCover = true);
@@ -3194,7 +3283,9 @@ class _TripDialogState extends State<_TripDialog> {
           _coverImageBytes = bytes;
           _coverContentType = _contentTypeFor(image.name, image.mimeType);
           _removeCover = false;
+          _photoNeedsReselection = false;
         });
+        _scheduleDraftSave();
       }
     } catch (_) {
       if (mounted) {
@@ -3213,6 +3304,10 @@ class _TripDialogState extends State<_TripDialog> {
 
   @override
   void dispose() {
+    _draftTimer?.cancel();
+    if (_usesLocalDraft && !_draftDiscarded) {
+      unawaited(_persistDraft(updateState: false));
+    }
     _nameController.dispose();
     _descriptionController.dispose();
     _locationController.dispose();
@@ -3234,6 +3329,7 @@ class _TripDialogState extends State<_TripDialog> {
           _endDate = selected;
         }
       });
+      _scheduleDraftSave();
     }
   }
 
@@ -3247,13 +3343,17 @@ class _TripDialogState extends State<_TripDialog> {
     );
     if (selected != null && mounted) {
       setState(() => _endDate = selected);
+      _scheduleDraftSave();
     }
   }
 
-  void _submit() {
+  Future<void> _submit() async {
     if (!(_formKey.currentState?.validate() ?? false)) {
       return;
     }
+    _draftTimer?.cancel();
+    await _persistDraft();
+    if (!mounted) return;
     Navigator.of(context).pop(
       _TripDraft(
         name: _nameController.text.trim(),
@@ -3281,9 +3381,22 @@ class _TripDialogState extends State<_TripDialog> {
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
+                if (_isLoadingDraft) ...[
+                  const LinearProgressIndicator(),
+                  const SizedBox(height: 12),
+                ] else if (_usesLocalDraft &&
+                    (_draftRestored || _draftSaved)) ...[
+                  _DraftNotice(
+                    restored: _draftRestored,
+                    saved: _draftSaved,
+                    photoNeedsReselection: _photoNeedsReselection,
+                  ),
+                  const SizedBox(height: 12),
+                ],
                 TextFormField(
                   controller: _nameController,
-                  autofocus: true,
+                  autofocus: !_draftRestored,
+                  enabled: !_isLoadingDraft,
                   textInputAction: TextInputAction.next,
                   maxLength: 100,
                   decoration: const InputDecoration(labelText: 'Trip name'),
@@ -3294,6 +3407,7 @@ class _TripDialogState extends State<_TripDialog> {
                 const SizedBox(height: 12),
                 TextFormField(
                   controller: _descriptionController,
+                  enabled: !_isLoadingDraft,
                   maxLength: 1000,
                   maxLines: 3,
                   decoration: const InputDecoration(
@@ -3303,6 +3417,7 @@ class _TripDialogState extends State<_TripDialog> {
                 const SizedBox(height: 12),
                 TextFormField(
                   controller: _locationController,
+                  enabled: !_isLoadingDraft,
                   maxLength: 160,
                   textInputAction: TextInputAction.done,
                   decoration: const InputDecoration(
@@ -3327,6 +3442,7 @@ class _TripDialogState extends State<_TripDialog> {
                   onChanged: (status) {
                     if (status != null) {
                       setState(() => _status = status);
+                      _scheduleDraftSave();
                     }
                   },
                 ),
@@ -3377,11 +3493,15 @@ class _TripDialogState extends State<_TripDialog> {
                     if (_coverImageBytes != null ||
                         (widget.trip?.coverImagePath != null && !_removeCover))
                       TextButton(
-                        onPressed: () => setState(() {
-                          _coverImageBytes = null;
-                          _coverContentType = null;
-                          _removeCover = widget.trip?.coverImagePath != null;
-                        }),
+                        onPressed: () {
+                          setState(() {
+                            _coverImageBytes = null;
+                            _coverContentType = null;
+                            _removeCover = widget.trip?.coverImagePath != null;
+                            _photoNeedsReselection = false;
+                          });
+                          _scheduleDraftSave();
+                        },
                         child: const Text('Remove'),
                       ),
                   ],
@@ -3403,7 +3523,10 @@ class _TripDialogState extends State<_TripDialog> {
                     ),
                     if (_startDate != null)
                       IconButton(
-                        onPressed: () => setState(() => _startDate = null),
+                        onPressed: () {
+                          setState(() => _startDate = null);
+                          _scheduleDraftSave();
+                        },
                         tooltip: 'Clear start date',
                         icon: const Icon(Icons.close),
                       ),
@@ -3426,7 +3549,10 @@ class _TripDialogState extends State<_TripDialog> {
                     ),
                     if (_endDate != null)
                       IconButton(
-                        onPressed: () => setState(() => _endDate = null),
+                        onPressed: () {
+                          setState(() => _endDate = null);
+                          _scheduleDraftSave();
+                        },
                         tooltip: 'Clear end date',
                         icon: const Icon(Icons.close),
                       ),
@@ -3438,15 +3564,72 @@ class _TripDialogState extends State<_TripDialog> {
         ),
       ),
       actions: [
+        if (_usesLocalDraft)
+          TextButton(
+            onPressed: _isLoadingDraft ? null : _discardDraft,
+            child: const Text('Discard draft'),
+          ),
         TextButton(
           onPressed: () => Navigator.of(context).pop(),
           child: const Text('Cancel'),
         ),
         FilledButton(
-          onPressed: _submit,
+          onPressed: _isLoadingDraft ? null : _submit,
           child: Text(widget.trip == null ? 'Create' : 'Save changes'),
         ),
       ],
+    );
+  }
+}
+
+class _DraftNotice extends StatelessWidget {
+  const _DraftNotice({
+    required this.restored,
+    required this.saved,
+    required this.photoNeedsReselection,
+  });
+
+  final bool restored;
+  final bool saved;
+  final bool photoNeedsReselection;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Theme.of(context).colorScheme.secondaryContainer,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(saved ? Icons.cloud_done_outlined : Icons.sync_outlined),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  saved
+                      ? restored
+                            ? 'Recovered draft saved locally'
+                            : 'Draft saved locally'
+                      : 'Saving draft locally…',
+                  style: Theme.of(context).textTheme.labelLarge,
+                ),
+                if (photoNeedsReselection) ...[
+                  const SizedBox(height: 4),
+                  const Text(
+                    'For privacy and browser compatibility, please reselect the photo.',
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

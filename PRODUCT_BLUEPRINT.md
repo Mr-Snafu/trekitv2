@@ -41,7 +41,7 @@ This document is the source of truth for TrekIt V2 development. TrekIt is a priv
 
 - Offer context-aware creation for adventures, journal entries, photos, and quick snippets. *(Live)*
 - Allow a user to choose the destination adventure without navigating away first. *(Live)*
-- Preserve unsent work when connectivity is interrupted.
+- Preserve unsent adventure and journal text, dates, destination context, and Quick Snippets when connectivity is interrupted. Photos must be reselected after recovery for privacy and browser compatibility. *(Live)*
 
 ### Circle
 
@@ -67,5 +67,6 @@ This document is the source of truth for TrekIt V2 development. TrekIt is a priv
 6. Add comments and richer feed events. *(Live)*
 7. Expand the central Create hub with destination-aware photo and Quick Snippet flows. *(Live)*
 8. Polish Feed readability with friendly time labels, day grouping, and richer event context. *(Live)*
+9. Add account-scoped local draft recovery for adventure and journal creation. *(Live)*
 
 Every phase should be checked against this blueprint, tested at mobile width, deployed through a preview, verified against the live build, and backed up to GitHub.

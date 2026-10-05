@@ -1,9 +1,11 @@
+import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 
+import '../../../core/drafts/local_draft_store.dart';
 import '../data/trip_repository.dart';
 import '../domain/adventure_comment.dart';
 import '../domain/journal_entry.dart';
@@ -59,7 +61,11 @@ class _TripDetailScreenState extends State<TripDetailScreen> {
   Future<void> _createEntry({bool pickPhotoFirst = false}) async {
     final draft = await showDialog<_EntryDraft>(
       context: context,
-      builder: (_) => _CreateEntryDialog(pickPhotoOnOpen: pickPhotoFirst),
+      builder: (_) => _CreateEntryDialog(
+        userId: widget.userId,
+        tripId: widget.trip.id,
+        pickPhotoOnOpen: pickPhotoFirst,
+      ),
     );
     if (draft == null || !mounted) {
       return;
@@ -81,6 +87,7 @@ class _TripDetailScreenState extends State<TripDetailScreen> {
           }
         },
       );
+      await LocalDraftStore().clearEntry(widget.userId, widget.trip.id);
       if (mounted) {
         ScaffoldMessenger.of(
           context,
@@ -825,8 +832,14 @@ class _EntryDraft {
 }
 
 class _CreateEntryDialog extends StatefulWidget {
-  const _CreateEntryDialog({this.pickPhotoOnOpen = false});
+  const _CreateEntryDialog({
+    required this.userId,
+    required this.tripId,
+    this.pickPhotoOnOpen = false,
+  });
 
+  final String userId;
+  final String tripId;
   final bool pickPhotoOnOpen;
 
   @override
@@ -835,6 +848,7 @@ class _CreateEntryDialog extends StatefulWidget {
 
 class _CreateEntryDialogState extends State<_CreateEntryDialog> {
   final _formKey = GlobalKey<FormState>();
+  final _draftStore = LocalDraftStore();
   final _titleController = TextEditingController();
   final _bodyController = TextEditingController();
   final _picker = ImagePicker();
@@ -842,13 +856,71 @@ class _CreateEntryDialogState extends State<_CreateEntryDialog> {
   String? _imageContentType;
   bool _isPickingImage = false;
   DateTime _memoryDate = DateUtils.dateOnly(DateTime.now());
+  Timer? _draftTimer;
+  bool _isLoadingDraft = true;
+  bool _draftRestored = false;
+  bool _draftSaved = false;
+  bool _photoNeedsReselection = false;
+  bool _draftDiscarded = false;
 
   @override
   void initState() {
     super.initState();
-    if (widget.pickPhotoOnOpen) {
+    _restoreDraft();
+  }
+
+  Future<void> _restoreDraft() async {
+    final draft = await _draftStore.loadEntry(widget.userId, widget.tripId);
+    if (!mounted) return;
+    if (draft != null && !draft.isEmpty) {
+      _titleController.text = draft.title;
+      _bodyController.text = draft.body;
+      _memoryDate = DateUtils.dateOnly(
+        isFutureMemoryDate(draft.memoryDate)
+            ? DateTime.now()
+            : draft.memoryDate,
+      );
+      _draftRestored = true;
+      _draftSaved = true;
+      _photoNeedsReselection = draft.hadPhoto;
+    }
+    _titleController.addListener(_scheduleDraftSave);
+    _bodyController.addListener(_scheduleDraftSave);
+    setState(() => _isLoadingDraft = false);
+    if (widget.pickPhotoOnOpen && !_photoNeedsReselection) {
       WidgetsBinding.instance.addPostFrameCallback((_) => _pickImage());
     }
+  }
+
+  void _scheduleDraftSave() {
+    if (_draftDiscarded || _isLoadingDraft) return;
+    _draftTimer?.cancel();
+    if (mounted) setState(() => _draftSaved = false);
+    _draftTimer = Timer(const Duration(milliseconds: 500), _persistDraft);
+  }
+
+  Future<void> _persistDraft({bool updateState = true}) async {
+    if (_draftDiscarded) return;
+    final draft = JournalFormDraft(
+      title: _titleController.text,
+      body: _bodyController.text,
+      memoryDate: _memoryDate,
+      hadPhoto: _imageBytes != null || _photoNeedsReselection,
+      updatedAt: DateTime.now(),
+    );
+    if (draft.isEmpty) {
+      await _draftStore.clearEntry(widget.userId, widget.tripId);
+    } else {
+      await _draftStore.saveEntry(widget.userId, widget.tripId, draft);
+    }
+    if (updateState && mounted) setState(() => _draftSaved = !draft.isEmpty);
+  }
+
+  Future<void> _discardDraft() async {
+    _draftTimer?.cancel();
+    _draftDiscarded = true;
+    await _draftStore.clearEntry(widget.userId, widget.tripId);
+    if (mounted) Navigator.of(context).pop();
   }
 
   Future<void> _pickMemoryDate() async {
@@ -861,6 +933,7 @@ class _CreateEntryDialogState extends State<_CreateEntryDialog> {
     );
     if (selectedDate != null && mounted) {
       setState(() => _memoryDate = DateUtils.dateOnly(selectedDate));
+      _scheduleDraftSave();
     }
   }
 
@@ -890,7 +963,9 @@ class _CreateEntryDialogState extends State<_CreateEntryDialog> {
         setState(() {
           _imageBytes = bytes;
           _imageContentType = image.mimeType ?? _contentTypeFor(image.name);
+          _photoNeedsReselection = false;
         });
+        _scheduleDraftSave();
       }
     } catch (_) {
       if (mounted) {
@@ -923,15 +998,22 @@ class _CreateEntryDialogState extends State<_CreateEntryDialog> {
 
   @override
   void dispose() {
+    _draftTimer?.cancel();
+    if (!_draftDiscarded) {
+      unawaited(_persistDraft(updateState: false));
+    }
     _titleController.dispose();
     _bodyController.dispose();
     super.dispose();
   }
 
-  void _submit() {
+  Future<void> _submit() async {
     if (!(_formKey.currentState?.validate() ?? false)) {
       return;
     }
+    _draftTimer?.cancel();
+    await _persistDraft();
+    if (!mounted) return;
     Navigator.of(context).pop(
       _EntryDraft(
         title: _titleController.text.trim(),
@@ -955,9 +1037,21 @@ class _CreateEntryDialogState extends State<_CreateEntryDialog> {
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
+                if (_isLoadingDraft) ...[
+                  const LinearProgressIndicator(),
+                  const SizedBox(height: 12),
+                ] else if (_draftRestored || _draftSaved) ...[
+                  _EntryDraftNotice(
+                    restored: _draftRestored,
+                    saved: _draftSaved,
+                    photoNeedsReselection: _photoNeedsReselection,
+                  ),
+                  const SizedBox(height: 12),
+                ],
                 TextFormField(
                   controller: _titleController,
                   autofocus: !widget.pickPhotoOnOpen,
+                  enabled: !_isLoadingDraft,
                   maxLength: 120,
                   textInputAction: TextInputAction.next,
                   decoration: const InputDecoration(labelText: 'Title'),
@@ -967,6 +1061,7 @@ class _CreateEntryDialogState extends State<_CreateEntryDialog> {
                 const SizedBox(height: 12),
                 TextFormField(
                   controller: _bodyController,
+                  enabled: !_isLoadingDraft,
                   maxLength: 10000,
                   minLines: 5,
                   maxLines: 9,
@@ -1001,7 +1096,9 @@ class _CreateEntryDialogState extends State<_CreateEntryDialog> {
                 Row(
                   children: [
                     OutlinedButton.icon(
-                      onPressed: _isPickingImage ? null : _pickImage,
+                      onPressed: _isPickingImage || _isLoadingDraft
+                          ? null
+                          : _pickImage,
                       icon: _isPickingImage
                           ? const SizedBox.square(
                               dimension: 16,
@@ -1015,10 +1112,14 @@ class _CreateEntryDialogState extends State<_CreateEntryDialog> {
                     if (_imageBytes != null) ...[
                       const SizedBox(width: 8),
                       TextButton(
-                        onPressed: () => setState(() {
-                          _imageBytes = null;
-                          _imageContentType = null;
-                        }),
+                        onPressed: () {
+                          setState(() {
+                            _imageBytes = null;
+                            _imageContentType = null;
+                            _photoNeedsReselection = false;
+                          });
+                          _scheduleDraftSave();
+                        },
                         child: const Text('Remove'),
                       ),
                     ],
@@ -1031,11 +1132,70 @@ class _CreateEntryDialogState extends State<_CreateEntryDialog> {
       ),
       actions: [
         TextButton(
+          onPressed: _isLoadingDraft ? null : _discardDraft,
+          child: const Text('Discard draft'),
+        ),
+        TextButton(
           onPressed: () => Navigator.of(context).pop(),
           child: const Text('Cancel'),
         ),
-        FilledButton(onPressed: _submit, child: const Text('Save entry')),
+        FilledButton(
+          onPressed: _isLoadingDraft ? null : _submit,
+          child: const Text('Save entry'),
+        ),
       ],
+    );
+  }
+}
+
+class _EntryDraftNotice extends StatelessWidget {
+  const _EntryDraftNotice({
+    required this.restored,
+    required this.saved,
+    required this.photoNeedsReselection,
+  });
+
+  final bool restored;
+  final bool saved;
+  final bool photoNeedsReselection;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Theme.of(context).colorScheme.secondaryContainer,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(saved ? Icons.cloud_done_outlined : Icons.sync_outlined),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  saved
+                      ? restored
+                            ? 'Recovered draft saved locally'
+                            : 'Draft saved locally'
+                      : 'Saving draft locally…',
+                  style: Theme.of(context).textTheme.labelLarge,
+                ),
+                if (photoNeedsReselection) ...[
+                  const SizedBox(height: 4),
+                  const Text(
+                    'Your writing was recovered. Please reselect the photo before saving.',
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
