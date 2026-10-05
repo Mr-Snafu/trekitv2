@@ -18,7 +18,7 @@ This document is the source of truth for TrekIt V2 development. TrekIt is a priv
 | Feed | Private, newest-first activity from accessible adventures | Live with activity grouping, destination-aware inbox and browser notifications, and a local Quick Snippet retry queue |
 | Adventures | Organize owned and shared trips and open their journals | Live with lifecycle groups, cover images, search, filters, sorting, editing, deletion, sharing, entries, and photos |
 | Create | Start an adventure or capture content from anywhere | Live with adventure, journal-entry, photo-first memory, and Quick Snippet flows |
-| Circle | Manage trusted connections, requests, blocking, and TrekIt IDs | Live with private IDs, requests, cooldowns, remove, block, and unblock controls |
+| Circle | Manage trusted connections, requests, blocking, and TrekIt IDs | Live with private IDs, real invite links and QR codes, requests, cooldowns, remove, block, and unblock controls |
 | Profile | Identity, verification, settings, privacy, export, and account controls | Live with editable identity, saved preferences, JSON export, help/legal summaries, and account controls |
 
 ## Planned product capabilities
@@ -46,6 +46,7 @@ This document is the source of truth for TrekIt V2 development. TrekIt is a priv
 ### Circle
 
 - Each user receives a private, shareable TrekIt ID.
+- Shareable Circle links and QR codes prefill the inviter's TrekIt ID after sign-in. *(Live)*
 - Incoming and outgoing connection requests with decline cooldowns are live.
 - Remove, decline, block, and unblock actions are live.
 - Keep Circle relationships separate from access to a specific adventure.
@@ -71,5 +72,6 @@ This document is the source of truth for TrekIt V2 development. TrekIt is a priv
 10. Deliver preference-aware Circle and adventure notifications through a private real-time inbox. *(Live)*
 11. Add opt-in browser push delivery backed by private, server-managed device registrations. *(Live)*
 12. Route Circle and adventure notifications directly to their private in-app destination. *(Live)*
+13. Replace the Circle invite placeholder with real links, QR codes, and safe sign-in handoff. *(Live)*
 
 Every phase should be checked against this blueprint, tested at mobile width, deployed through a preview, verified against the live build, and backed up to GitHub.

@@ -6,11 +6,13 @@ import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:qr_flutter/qr_flutter.dart';
 
 import '../../../core/drafts/local_draft_store.dart';
 import '../../../core/time/friendly_time.dart';
 import '../../auth/data/auth_service.dart';
 import '../../circle/data/circle_repository.dart';
+import '../../circle/domain/circle_invite.dart';
 import '../../circle/domain/circle_state.dart';
 import '../../../core/download/download_file.dart';
 import '../../notifications/data/notification_repository.dart';
@@ -49,6 +51,7 @@ class _HomeScreenState extends State<HomeScreen> {
   NotificationDestination? _pendingNotificationDestination =
       NotificationDestination.fromUri(Uri.base);
   bool _isOpeningNotificationDestination = false;
+  String? _circleInviteTrekId;
   final _searchController = TextEditingController();
   final Set<String> _busyTripIds = <String>{};
   List<Trip> _latestTrips = const [];
@@ -65,6 +68,11 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   void initState() {
     super.initState();
+    final invite = CircleInvite.fromUri(Uri.base);
+    if (invite != null) {
+      _circleInviteTrekId = invite.trekId;
+      _selectedIndex = 3;
+    }
     _createOrRefreshProfile();
     _initializePushNotifications();
   }
@@ -925,7 +933,10 @@ class _HomeScreenState extends State<HomeScreen> {
               onCreate: _showCreateMenu,
             ),
             1 => _buildAdventuresPage(context),
-            3 => _CirclePage(repository: _circleRepository),
+            3 => _CirclePage(
+              repository: _circleRepository,
+              initialTrekId: _circleInviteTrekId,
+            ),
             4 => _ProfilePage(
               repository: _profileRepository,
               pushNotificationService: _pushNotificationService,
@@ -2029,16 +2040,17 @@ class _FeedEmptyState extends StatelessWidget {
 }
 
 class _CirclePage extends StatefulWidget {
-  const _CirclePage({required this.repository});
+  const _CirclePage({required this.repository, this.initialTrekId});
 
   final CircleRepository repository;
+  final String? initialTrekId;
 
   @override
   State<_CirclePage> createState() => _CirclePageState();
 }
 
 class _CirclePageState extends State<_CirclePage> {
-  final _trekIdController = TextEditingController();
+  late final TextEditingController _trekIdController;
   final _busyPeople = <String>{};
   CircleState? _state;
   String? _error;
@@ -2048,6 +2060,7 @@ class _CirclePageState extends State<_CirclePage> {
   @override
   void initState() {
     super.initState();
+    _trekIdController = TextEditingController(text: widget.initialTrekId);
     _load();
   }
 
@@ -2231,7 +2244,7 @@ class _CirclePageState extends State<_CirclePage> {
           const SizedBox(height: 20),
           _buildIdentityCard(context, state.profile),
           const SizedBox(height: 16),
-          _buildInviteCard(context),
+          _buildInviteCard(context, state.profile),
           const SizedBox(height: 24),
           _sectionTitle(context, 'Current Circle', state.circle.length),
           if (state.circle.isEmpty)
@@ -2333,7 +2346,9 @@ class _CirclePageState extends State<_CirclePage> {
     );
   }
 
-  Widget _buildInviteCard(BuildContext context) {
+  Widget _buildInviteCard(BuildContext context, CircleProfile profile) {
+    final invite = CircleInvite.forTrekId(profile.trekId);
+    final inviteUrl = invite.uri.toString();
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(18),
@@ -2341,7 +2356,7 @@ class _CirclePageState extends State<_CirclePage> {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             Text(
-              'Invite by TrekIt ID',
+              'Connect by TrekIt ID',
               style: Theme.of(context).textTheme.titleLarge
                   ?.copyWith(fontWeight: FontWeight.w800),
             ),
@@ -2367,6 +2382,50 @@ class _CirclePageState extends State<_CirclePage> {
                     )
                   : const Icon(Icons.send_outlined),
               label: const Text('Send request'),
+            ),
+            const SizedBox(height: 18),
+            const Divider(),
+            const SizedBox(height: 12),
+            Text(
+              'Share your Circle invite',
+              style: Theme.of(context).textTheme.titleLarge
+                  ?.copyWith(fontWeight: FontWeight.w800),
+            ),
+            const SizedBox(height: 6),
+            const Text(
+              'A trusted person can scan this code or open the link. TrekIt will prefill your private TrekIt ID after they sign in.',
+            ),
+            const SizedBox(height: 16),
+            Center(
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(18),
+                ),
+                child: Padding(
+                  padding: const EdgeInsets.all(12),
+                  child: QrImageView(
+                    data: inviteUrl,
+                    size: 188,
+                    semanticsLabel: 'QR code for ${profile.trekId}',
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(height: 12),
+            SelectableText(
+              inviteUrl,
+              textAlign: TextAlign.center,
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+            const SizedBox(height: 12),
+            OutlinedButton.icon(
+              onPressed: () async {
+                await Clipboard.setData(ClipboardData(text: inviteUrl));
+                if (mounted) _showMessage('Circle invite link copied.');
+              },
+              icon: const Icon(Icons.link_outlined),
+              label: const Text('Copy invite link'),
             ),
           ],
         ),
