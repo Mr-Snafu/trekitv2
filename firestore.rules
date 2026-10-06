@@ -64,6 +64,7 @@ service cloud.firestore {
     //   startDate: timestamp (optional)
     //   endDate: timestamp (optional, not before startDate when both exist)
     //   status: string (optional for legacy trips: draft, live, completed)
+    //   category: string (optional for legacy trips, bounded enum)
     //   coverImagePath: string (optional, owner-scoped Storage path)
     //   ownerId: string (required, immutable, <= 128)
     //   createdAt: timestamp (required, immutable)
@@ -198,7 +199,8 @@ service cloud.firestore {
         ]) &&
         hasOnlyAllowedFields(data, [
           'name', 'description', 'location', 'startDate', 'endDate',
-          'status', 'coverImagePath', 'ownerId', 'createdAt', 'updatedAt'
+          'status', 'category', 'coverImagePath', 'ownerId', 'createdAt',
+          'updatedAt'
         ]) &&
         data.name is string &&
         data.name.size() > 0 &&
@@ -216,6 +218,12 @@ service cloud.firestore {
         (!('status' in data) ||
           (data.status is string &&
             data.status in ['draft', 'live', 'completed'])) &&
+        (!('category' in data) ||
+          (data.category is string &&
+            data.category in [
+              'road_trip', 'vacation', 'outdoor_adventure', 'special_event',
+              'family_event', 'night_out', 'day_trip', 'other'
+            ])) &&
         isValidId(data.ownerId) &&
         isValidTripCoverPath(data, tripId) &&
         data.createdAt is timestamp &&

@@ -276,6 +276,7 @@ class _HomeScreenState extends State<HomeScreen> {
         description: draft.description,
         location: draft.location,
         status: draft.status,
+        category: draft.category,
         startDate: draft.startDate,
         endDate: draft.endDate,
         coverImageBytes: draft.coverImageBytes,
@@ -584,6 +585,7 @@ class _HomeScreenState extends State<HomeScreen> {
         description: draft.description,
         location: draft.location,
         status: draft.status,
+        category: draft.category,
         startDate: draft.startDate,
         endDate: draft.endDate,
         coverImageBytes: draft.coverImageBytes,
@@ -741,37 +743,36 @@ class _HomeScreenState extends State<HomeScreen> {
                           ),
                       ],
                     ),
-                    if (trip.location.isNotEmpty ||
-                        trip.startDate != null ||
-                        trip.endDate != null ||
-                        trip.accessRole != 'owner') ...[
-                      const SizedBox(height: 10),
-                      Wrap(
-                        spacing: 12,
-                        runSpacing: 8,
-                        children: [
-                          if (trip.location.isNotEmpty)
-                            _TripFact(
-                              icon: Icons.place_outlined,
-                              label: trip.location,
-                            ),
-                          if (trip.startDate != null || trip.endDate != null)
-                            _TripFact(
-                              icon: Icons.calendar_today_outlined,
-                              label: _formatTripDates(context, trip),
-                            ),
-                          if (trip.accessRole != 'owner')
-                            _TripFact(
-                              icon: trip.accessRole == 'editor'
-                                  ? Icons.edit_outlined
-                                  : Icons.visibility_outlined,
-                              label: trip.accessRole == 'editor'
-                                  ? 'Editor access'
-                                  : 'Shared with you',
-                            ),
-                        ],
-                      ),
-                    ],
+                    const SizedBox(height: 10),
+                    Wrap(
+                      spacing: 12,
+                      runSpacing: 8,
+                      children: [
+                        _TripFact(
+                          icon: Icons.category_outlined,
+                          label: trip.category.label,
+                        ),
+                        if (trip.location.isNotEmpty)
+                          _TripFact(
+                            icon: Icons.place_outlined,
+                            label: trip.location,
+                          ),
+                        if (trip.startDate != null || trip.endDate != null)
+                          _TripFact(
+                            icon: Icons.calendar_today_outlined,
+                            label: _formatTripDates(context, trip),
+                          ),
+                        if (trip.accessRole != 'owner')
+                          _TripFact(
+                            icon: trip.accessRole == 'editor'
+                                ? Icons.edit_outlined
+                                : Icons.visibility_outlined,
+                            label: trip.accessRole == 'editor'
+                                ? 'Editor access'
+                                : 'Shared with you',
+                          ),
+                      ],
+                    ),
                     if (trip.description.isNotEmpty) ...[
                       const SizedBox(height: 12),
                       Text(
@@ -3710,6 +3711,7 @@ class _TripDraft {
     required this.description,
     required this.location,
     required this.status,
+    required this.category,
     required this.removeCover,
     this.startDate,
     this.endDate,
@@ -3721,6 +3723,7 @@ class _TripDraft {
   final String description;
   final String location;
   final TripStatus status;
+  final TripCategory category;
   final bool removeCover;
   final DateTime? startDate;
   final DateTime? endDate;
@@ -3758,6 +3761,7 @@ class _TripDialogState extends State<_TripDialog> {
   late DateTime? _startDate = widget.trip?.startDate;
   late DateTime? _endDate = widget.trip?.endDate;
   late TripStatus _status = widget.trip?.status ?? TripStatus.draft;
+  late TripCategory _category = widget.trip?.category ?? TripCategory.roadTrip;
   final _imagePicker = ImagePicker();
   Uint8List? _coverImageBytes;
   String? _coverContentType;
@@ -3795,6 +3799,11 @@ class _TripDialogState extends State<_TripDialog> {
               .where((status) => status.name == draft.status)
               .firstOrNull ??
           TripStatus.draft;
+      _category =
+          TripCategory.values
+              .where((category) => category.name == draft.category)
+              .firstOrNull ??
+          TripCategory.roadTrip;
       _draftRestored = true;
       _draftSaved = true;
       _photoNeedsReselection = draft.hadPhoto;
@@ -3819,6 +3828,7 @@ class _TripDialogState extends State<_TripDialog> {
       description: _descriptionController.text,
       location: _locationController.text,
       status: _status.name,
+      category: _category.name,
       startDate: _startDate,
       endDate: _endDate,
       hadPhoto: _coverImageBytes != null || _photoNeedsReselection,
@@ -3941,6 +3951,7 @@ class _TripDialogState extends State<_TripDialog> {
         description: _descriptionController.text.trim(),
         location: _locationController.text.trim(),
         status: _status,
+        category: _category,
         removeCover: _removeCover,
         startDate: _startDate,
         endDate: _endDate,
@@ -4023,6 +4034,27 @@ class _TripDialogState extends State<_TripDialog> {
                   onChanged: (status) {
                     if (status != null) {
                       setState(() => _status = status);
+                      _scheduleDraftSave();
+                    }
+                  },
+                ),
+                const SizedBox(height: 12),
+                DropdownButtonFormField<TripCategory>(
+                  initialValue: _category,
+                  decoration: const InputDecoration(
+                    labelText: 'Category',
+                    prefixIcon: Icon(Icons.category_outlined),
+                  ),
+                  items: [
+                    for (final category in TripCategory.values)
+                      DropdownMenuItem(
+                        value: category,
+                        child: Text(category.label),
+                      ),
+                  ],
+                  onChanged: (category) {
+                    if (category != null) {
+                      setState(() => _category = category);
                       _scheduleDraftSave();
                     }
                   },

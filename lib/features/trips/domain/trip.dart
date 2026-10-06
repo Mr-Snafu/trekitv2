@@ -18,6 +18,29 @@ enum TripStatus {
   }
 }
 
+enum TripCategory {
+  roadTrip('road_trip', 'Road Trip'),
+  vacation('vacation', 'Vacation'),
+  outdoorAdventure('outdoor_adventure', 'Outdoor Adventure'),
+  specialEvent('special_event', 'Special Event'),
+  familyEvent('family_event', 'Family Event'),
+  nightOut('night_out', 'Night Out'),
+  dayTrip('day_trip', 'Day Trip'),
+  other('other', 'Other');
+
+  const TripCategory(this.value, this.label);
+
+  final String value;
+  final String label;
+
+  static TripCategory fromValue(Object? value) {
+    return TripCategory.values.firstWhere(
+      (category) => category.value == value,
+      orElse: () => TripCategory.other,
+    );
+  }
+}
+
 class Trip {
   const Trip({
     required this.id,
@@ -31,6 +54,7 @@ class Trip {
     this.endDate,
     this.accessRole = 'owner',
     this.status = TripStatus.live,
+    this.category = TripCategory.other,
     this.coverImagePath,
   });
 
@@ -45,6 +69,7 @@ class Trip {
   final DateTime? endDate;
   final String accessRole;
   final TripStatus status;
+  final TripCategory category;
   final String? coverImagePath;
 
   factory Trip.fromFirestore(DocumentSnapshot<Map<String, dynamic>> snapshot) {
@@ -60,6 +85,7 @@ class Trip {
       startDate: _optionalDateFrom(data['startDate']),
       endDate: _optionalDateFrom(data['endDate']),
       status: TripStatus.fromValue(data['status']),
+      category: TripCategory.fromValue(data['category']),
       coverImagePath: data['coverImagePath'] as String?,
     );
   }
@@ -77,6 +103,7 @@ class Trip {
       endDate: endDate,
       accessRole: role,
       status: status,
+      category: category,
       coverImagePath: coverImagePath,
     );
   }

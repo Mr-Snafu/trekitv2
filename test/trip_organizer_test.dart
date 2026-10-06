@@ -15,6 +15,7 @@ void main() {
       createdAt: older,
       updatedAt: recent,
       startDate: DateTime(2026, 12, 10),
+      category: TripCategory.outdoorAdventure,
     ),
     Trip(
       id: 'shared',
@@ -26,6 +27,7 @@ void main() {
       updatedAt: older,
       startDate: DateTime(2027, 1, 4),
       accessRole: 'viewer',
+      category: TripCategory.vacation,
     ),
   ];
 
@@ -35,6 +37,7 @@ void main() {
       expect(organizeTrips(trips, query: 'colorado').single.id, 'owned');
       expect(organizeTrips(trips, query: 'QUIET').single.id, 'shared');
       expect(organizeTrips(trips, query: 'lake').single.id, 'shared');
+      expect(organizeTrips(trips, query: 'outdoor').single.id, 'owned');
     },
   );
 

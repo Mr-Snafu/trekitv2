@@ -23,7 +23,8 @@ List<Trip> organizeTrips(
         }
         return trip.name.toLowerCase().contains(normalizedQuery) ||
             trip.description.toLowerCase().contains(normalizedQuery) ||
-            trip.location.toLowerCase().contains(normalizedQuery);
+            trip.location.toLowerCase().contains(normalizedQuery) ||
+            trip.category.label.toLowerCase().contains(normalizedQuery);
       })
       .toList(growable: false);
 

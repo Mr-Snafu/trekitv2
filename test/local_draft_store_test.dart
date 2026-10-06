@@ -9,6 +9,7 @@ void main() {
       description: 'Forests and coast',
       location: 'Oregon',
       status: 'draft',
+      category: 'outdoorAdventure',
       startDate: DateTime(2026, 11, 2),
       hadPhoto: true,
       updatedAt: DateTime(2026, 10, 4),
@@ -19,6 +20,7 @@ void main() {
 
     expect(restored?.name, draft.name);
     expect(restored?.startDate, draft.startDate);
+    expect(restored?.category, draft.category);
     expect(restored?.hadPhoto, isTrue);
     expect(await store.loadAdventure('user-2'), isNull);
     await store.clearAdventure('user-1');

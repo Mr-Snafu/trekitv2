@@ -104,6 +104,7 @@ class TripRepository {
     required String description,
     required String location,
     required TripStatus status,
+    required TripCategory category,
     DateTime? startDate,
     DateTime? endDate,
     Uint8List? coverImageBytes,
@@ -132,6 +133,7 @@ class TripRepository {
       if (startDate != null) 'startDate': Timestamp.fromDate(startDate),
       if (endDate != null) 'endDate': Timestamp.fromDate(endDate),
       'status': status.value,
+      'category': category.value,
       'coverImagePath': ?coverImagePath,
       'ownerId': ownerId,
       'createdAt': now,
@@ -606,6 +608,7 @@ class TripRepository {
     required String description,
     required String location,
     required TripStatus status,
+    required TripCategory category,
     DateTime? startDate,
     DateTime? endDate,
     Uint8List? coverImageBytes,
@@ -634,6 +637,7 @@ class TripRepository {
           ? FieldValue.delete()
           : Timestamp.fromDate(endDate),
       'status': status.value,
+      'category': category.value,
       if (coverImageBytes != null) 'coverImagePath': coverImagePath,
       if (removeCover && coverImageBytes == null)
         'coverImagePath': FieldValue.delete(),

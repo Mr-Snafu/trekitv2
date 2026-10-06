@@ -79,6 +79,7 @@ class AdventureFormDraft {
     required this.location,
     required this.status,
     required this.updatedAt,
+    this.category = 'roadTrip',
     this.startDate,
     this.endDate,
     this.hadPhoto = false,
@@ -90,6 +91,7 @@ class AdventureFormDraft {
       description: json['description'] as String? ?? '',
       location: json['location'] as String? ?? '',
       status: json['status'] as String? ?? 'draft',
+      category: json['category'] as String? ?? 'roadTrip',
       startDate: _tryDate(json['startDate']),
       endDate: _tryDate(json['endDate']),
       hadPhoto: json['hadPhoto'] as bool? ?? false,
@@ -101,6 +103,7 @@ class AdventureFormDraft {
   final String description;
   final String location;
   final String status;
+  final String category;
   final DateTime? startDate;
   final DateTime? endDate;
   final bool hadPhoto;
@@ -112,6 +115,7 @@ class AdventureFormDraft {
       location.isEmpty &&
       startDate == null &&
       endDate == null &&
+      category == 'roadTrip' &&
       !hadPhoto;
 
   Map<String, Object?> toJson() => {
@@ -119,6 +123,7 @@ class AdventureFormDraft {
     'description': description,
     'location': location,
     'status': status,
+    'category': category,
     if (startDate != null) 'startDate': startDate!.toIso8601String(),
     if (endDate != null) 'endDate': endDate!.toIso8601String(),
     'hadPhoto': hadPhoto,
