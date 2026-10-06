@@ -15,10 +15,10 @@ This document is the source of truth for TrekIt V2 development. TrekIt is a priv
 
 | Area | Purpose | Current status |
 | --- | --- | --- |
-| Feed | Private, newest-first activity from accessible adventures | Live with activity grouping, destination-aware inbox and browser notifications, and a local Quick Snippet retry queue |
+| Feed | Private, newest-first activity from accessible adventures | Live with activity grouping, destination-aware inbox and browser notifications, and compact photo-capable Quick Snippets with a local text retry queue |
 | Adventures | Organize owned and shared trips and open their journals | Live with lifecycle groups, cover images, search, filters, sorting, editing, deletion, sharing, entries, and photos |
 | Create | Start an adventure or capture content from anywhere | Live with adventure, journal-entry, global quick-camera, photo-first memory, and Quick Snippet flows |
-| Circle | Manage trusted connections, requests, blocking, and TrekIt IDs | Live with private IDs, real invite links and QR codes, requests, cooldowns, remove, block, and unblock controls |
+| Circle | Manage trusted connections, reciprocal adventure viewing, requests, blocking, and TrekIt IDs | Live with private IDs, real invite links and QR codes, mutual viewer access, requests, cooldowns, remove, block, and unblock controls |
 | Profile | Identity, verification, settings, privacy, export, installation, and account controls | Live with editable identity, saved preferences, install guidance, JSON export, help/legal summaries, and account controls |
 
 ## Planned product capabilities
@@ -27,7 +27,7 @@ This document is the source of truth for TrekIt V2 development. TrekIt is a priv
 
 - Show only activity from authorized adventures.
 - Support adventure, journal-entry, photo, sharing, and comment activity. *(Live)*
-- Quick Snippets and a clear locally saved pending/retry state are live.
+- Compact, photo-capable Quick Snippets and a clear locally saved text pending/retry state are live.
 - Use friendly dates, grouped time periods, and useful event summaries rather than raw timestamps. *(Live)*
 
 ### Adventures
@@ -50,7 +50,7 @@ This document is the source of truth for TrekIt V2 development. TrekIt is a priv
 - Shareable Circle links and QR codes prefill the inviter's TrekIt ID after sign-in. *(Live)*
 - Incoming and outgoing connection requests with decline cooldowns are live.
 - Remove, decline, block, and unblock actions are live.
-- Keep Circle relationships separate from access to a specific adventure.
+- Accepting a Circle relationship grants both people viewer access to each other’s existing and future adventures.
 
 ### Profile
 

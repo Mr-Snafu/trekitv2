@@ -539,11 +539,17 @@ class _HomeScreenState extends State<HomeScreen> {
               text: snippet.text,
               location: snippet.location,
               capturedAt: snippet.capturedAt,
+              imageBytes: draft.imageBytes,
+              imageContentType: draft.imageContentType,
             )
-            .timeout(const Duration(seconds: 10));
+            .timeout(const Duration(seconds: 60));
       } catch (_) {
-        await queue.enqueue(widget.user.uid, snippet);
-        message = 'Could not post now, so it was saved locally for retry.';
+        if (draft.imageBytes == null) {
+          await queue.enqueue(widget.user.uid, snippet);
+          message = 'Could not post now, so it was saved locally for retry.';
+        } else {
+          message = 'The photo snippet could not be posted. Please try again.';
+        }
       }
     }
     if (mounted) {
@@ -788,26 +794,6 @@ class _HomeScreenState extends State<HomeScreen> {
       appBar: AppBar(
         title: const Text('Your adventures'),
         actions: [
-          IconButton(
-            onPressed: _isDeletingAccount ? null : _openAccountSettings,
-            tooltip: 'Account settings',
-            icon: _isDeletingAccount
-                ? const SizedBox.square(
-                    dimension: 20,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  )
-                : const Icon(Icons.account_circle_outlined),
-          ),
-          IconButton(
-            onPressed: _isSigningOut ? null : _signOut,
-            tooltip: 'Sign out',
-            icon: _isSigningOut
-                ? const SizedBox.square(
-                    dimension: 20,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  )
-                : const Icon(Icons.logout),
-          ),
           QuickCaptureButton(
             onPressed: _quickCapture,
             isLoading: _isCapturingMoment,
@@ -998,6 +984,7 @@ class _HomeScreenState extends State<HomeScreen> {
               onOpenTrip: _openTrip,
               onOpenCircle: () => setState(() => _selectedIndex = 3),
               onQuickCapture: _isCapturingMoment ? null : _quickCapture,
+              onCreateSnippet: _createQuickSnippet,
               onCreate: _showCreateMenu,
             ),
             1 => _buildAdventuresPage(context),
@@ -1166,12 +1153,16 @@ class _QuickSnippetDraft {
     required this.text,
     required this.location,
     required this.saveLocally,
+    this.imageBytes,
+    this.imageContentType,
   });
 
   final Trip trip;
   final String text;
   final String location;
   final bool saveLocally;
+  final Uint8List? imageBytes;
+  final String? imageContentType;
 }
 
 class _QuickSnippetDialog extends StatefulWidget {
@@ -1187,7 +1178,11 @@ class _QuickSnippetDialogState extends State<_QuickSnippetDialog> {
   final _formKey = GlobalKey<FormState>();
   final _textController = TextEditingController();
   final _locationController = TextEditingController();
+  final _imagePicker = ImagePicker();
   late String _tripId = widget.trips.first.id;
+  Uint8List? _imageBytes;
+  String? _imageContentType;
+  bool _isPickingPhoto = false;
 
   @override
   void dispose() {
@@ -1205,8 +1200,43 @@ class _QuickSnippetDialogState extends State<_QuickSnippetDialog> {
         text: _textController.text.trim(),
         location: _locationController.text.trim(),
         saveLocally: saveLocally,
+        imageBytes: _imageBytes,
+        imageContentType: _imageContentType,
       ),
     );
+  }
+
+  Future<void> _pickPhoto() async {
+    setState(() => _isPickingPhoto = true);
+    try {
+      final image = await _imagePicker.pickImage(
+        source: ImageSource.gallery,
+        imageQuality: 88,
+        maxWidth: 2400,
+      );
+      if (image == null || !mounted) return;
+      final bytes = await image.readAsBytes();
+      if (!mounted) return;
+      if (bytes.isEmpty || bytes.length > TripRepository.maxImageBytes) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Choose a photo smaller than 25 MB.')),
+        );
+        return;
+      }
+      setState(() {
+        _imageBytes = bytes;
+        _imageContentType = image.mimeType ?? _imageTypeForName(image.name);
+      });
+    } catch (error, stackTrace) {
+      debugPrint('Quick Snippet photo picker failed: $error\n$stackTrace');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('The photo picker could not open.')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isPickingPhoto = false);
+    }
   }
 
   @override
@@ -1256,6 +1286,57 @@ class _QuickSnippetDialogState extends State<_QuickSnippetDialog> {
                     if (value != null) setState(() => _tripId = value);
                   },
                 ),
+                const SizedBox(height: 14),
+                if (_imageBytes case final bytes?) ...[
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(16),
+                    child: Image.memory(
+                      bytes,
+                      height: 180,
+                      width: double.infinity,
+                      fit: BoxFit.cover,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                ],
+                Row(
+                  children: [
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        onPressed: _isPickingPhoto ? null : _pickPhoto,
+                        icon: _isPickingPhoto
+                            ? const SizedBox.square(
+                                dimension: 18,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                ),
+                              )
+                            : const Icon(Icons.add_photo_alternate_outlined),
+                        label: Text(
+                          _imageBytes == null ? 'Add photo' : 'Change photo',
+                        ),
+                      ),
+                    ),
+                    if (_imageBytes != null) ...[
+                      const SizedBox(width: 8),
+                      IconButton(
+                        tooltip: 'Remove photo',
+                        onPressed: () => setState(() {
+                          _imageBytes = null;
+                          _imageContentType = null;
+                        }),
+                        icon: const Icon(Icons.delete_outline),
+                      ),
+                    ],
+                  ],
+                ),
+                if (_imageBytes != null)
+                  const Padding(
+                    padding: EdgeInsets.only(top: 6),
+                    child: Text(
+                      'Photo snippets post immediately. Remove the photo to save this note locally.',
+                    ),
+                  ),
               ],
             ),
           ),
@@ -1267,7 +1348,9 @@ class _QuickSnippetDialogState extends State<_QuickSnippetDialog> {
           child: const Text('Cancel'),
         ),
         OutlinedButton(
-          onPressed: () => _submit(saveLocally: true),
+          onPressed: _imageBytes == null
+              ? () => _submit(saveLocally: true)
+              : null,
           child: const Text('Save locally'),
         ),
         FilledButton(
@@ -1277,6 +1360,16 @@ class _QuickSnippetDialogState extends State<_QuickSnippetDialog> {
       ],
     );
   }
+}
+
+String _imageTypeForName(String fileName) {
+  final lowerName = fileName.toLowerCase();
+  if (lowerName.endsWith('.png')) return 'image/png';
+  if (lowerName.endsWith('.webp')) return 'image/webp';
+  if (lowerName.endsWith('.heic') || lowerName.endsWith('.heif')) {
+    return 'image/heic';
+  }
+  return 'image/jpeg';
 }
 
 class _FeedPage extends StatefulWidget {
@@ -1291,6 +1384,7 @@ class _FeedPage extends StatefulWidget {
     required this.onOpenTrip,
     required this.onOpenCircle,
     required this.onQuickCapture,
+    required this.onCreateSnippet,
     required this.onCreate,
   });
 
@@ -1303,6 +1397,7 @@ class _FeedPage extends StatefulWidget {
   final ValueChanged<Trip> onOpenTrip;
   final VoidCallback onOpenCircle;
   final VoidCallback? onQuickCapture;
+  final Future<void> Function() onCreateSnippet;
   final VoidCallback onCreate;
 
   @override
@@ -1310,13 +1405,9 @@ class _FeedPage extends StatefulWidget {
 }
 
 class _FeedPageState extends State<_FeedPage> {
-  final _textController = TextEditingController();
-  final _locationController = TextEditingController();
   final _queue = QuickSnippetQueue();
   late Stream<List<AdventureActivity>> _activityStream;
   List<QueuedSnippet> _queued = const [];
-  String? _selectedTripId;
-  bool _isPosting = false;
   bool _isRetrying = false;
 
   List<Trip> get _editableTrips => widget.trips
@@ -1329,7 +1420,6 @@ class _FeedPageState extends State<_FeedPage> {
   void initState() {
     super.initState();
     _activityStream = widget.repository.watchActivityFeed(widget.trips);
-    _selectedTripId = _editableTrips.firstOrNull?.id;
     _loadQueue();
   }
 
@@ -1344,81 +1434,13 @@ class _FeedPageState extends State<_FeedPage> {
         .join('|');
     if (oldAccess != newAccess) {
       _activityStream = widget.repository.watchActivityFeed(widget.trips);
-      if (!_editableTrips.any((trip) => trip.id == _selectedTripId)) {
-        _selectedTripId = _editableTrips.firstOrNull?.id;
-      }
     }
-  }
-
-  @override
-  void dispose() {
-    _textController.dispose();
-    _locationController.dispose();
-    super.dispose();
   }
 
   Future<void> _loadQueue() async {
     final queued = await _queue.load(widget.userId);
     if (mounted) {
       setState(() => _queued = queued);
-    }
-  }
-
-  QueuedSnippet? _draftSnippet() {
-    final text = _textController.text.trim();
-    final location = _locationController.text.trim();
-    final trip = _editableTrips
-        .where((item) => item.id == _selectedTripId)
-        .firstOrNull;
-    if (trip == null) {
-      _showMessage('Choose an adventure you can edit.');
-      return null;
-    }
-    if (text.isEmpty) {
-      _showMessage('Add a quick note first.');
-      return null;
-    }
-    if (text.length > 1000 || location.length > 160) {
-      _showMessage(
-        'Keep the note under 1,000 characters and location under 160.',
-      );
-      return null;
-    }
-    return QueuedSnippet.create(
-      tripId: trip.id,
-      tripName: trip.name,
-      text: text,
-      location: location,
-    );
-  }
-
-  Future<void> _saveLocally() async {
-    final snippet = _draftSnippet();
-    if (snippet == null) return;
-    final queued = await _queue.enqueue(widget.userId, snippet);
-    if (!mounted) return;
-    setState(() => _queued = queued);
-    _clearComposer();
-    _showMessage('Saved locally. It is waiting to be posted.');
-  }
-
-  Future<void> _postSnippet() async {
-    final snippet = _draftSnippet();
-    if (snippet == null) return;
-    setState(() => _isPosting = true);
-    try {
-      await _upload(snippet).timeout(const Duration(seconds: 10));
-      if (!mounted) return;
-      _clearComposer();
-      _showMessage('Quick snippet posted.');
-    } catch (_) {
-      final queued = await _queue.enqueue(widget.userId, snippet);
-      if (!mounted) return;
-      setState(() => _queued = queued);
-      _clearComposer();
-      _showMessage('Could not post now, so it was saved locally for retry.');
-    } finally {
-      if (mounted) setState(() => _isPosting = false);
     }
   }
 
@@ -1462,11 +1484,6 @@ class _FeedPageState extends State<_FeedPage> {
   Future<void> _discardQueued(String snippetId) async {
     final queued = await _queue.remove(widget.userId, snippetId);
     if (mounted) setState(() => _queued = queued);
-  }
-
-  void _clearComposer() {
-    _textController.clear();
-    _locationController.clear();
   }
 
   void _showMessage(String message) {
@@ -1555,8 +1572,23 @@ class _FeedPageState extends State<_FeedPage> {
                     'Private activity from adventures you are authorized to view.',
                     style: Theme.of(context).textTheme.bodyLarge,
                   ),
-                  const SizedBox(height: 20),
-                  _buildComposer(context),
+                  const SizedBox(height: 14),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: FilledButton.icon(
+                      onPressed: _editableTrips.isEmpty
+                          ? null
+                          : widget.onCreateSnippet,
+                      icon: const Icon(Icons.bolt_outlined),
+                      label: const Text('Quick Snippet'),
+                    ),
+                  ),
+                  if (_editableTrips.isEmpty) ...[
+                    const SizedBox(height: 8),
+                    const Text(
+                      'Create an adventure or request editor access to post a snippet.',
+                    ),
+                  ],
                   if (_queued.isNotEmpty) ...[
                     const SizedBox(height: 20),
                     _buildPendingQueue(context),
@@ -1630,6 +1662,7 @@ class _FeedPageState extends State<_FeedPage> {
                               _ActivityCard(
                                 activity: visibleActivity[index],
                                 now: now,
+                                repository: widget.repository,
                                 onTap: () => widget.onOpenTrip(
                                   visibleActivity[index].trip,
                                 ),
@@ -1642,96 +1675,6 @@ class _FeedPageState extends State<_FeedPage> {
                     ),
                 ],
               ),
-      ),
-    );
-  }
-
-  Widget _buildComposer(BuildContext context) {
-    final enabled = _editableTrips.isNotEmpty && !_isPosting;
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(18),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              'Quick Snippet',
-              style: Theme.of(context).textTheme.titleLarge
-                  ?.copyWith(fontWeight: FontWeight.w800),
-            ),
-            const SizedBox(height: 6),
-            Text(
-              'Post a short moment now, or save it locally when your connection is unreliable.',
-              style: Theme.of(context).textTheme.bodyMedium,
-            ),
-            const SizedBox(height: 16),
-            TextField(
-              controller: _textController,
-              enabled: enabled,
-              maxLength: 1000,
-              minLines: 2,
-              maxLines: 5,
-              decoration: const InputDecoration(
-                labelText: 'What happened?',
-                alignLabelWithHint: true,
-              ),
-            ),
-            const SizedBox(height: 10),
-            TextField(
-              controller: _locationController,
-              enabled: enabled,
-              maxLength: 160,
-              decoration: const InputDecoration(
-                labelText: 'Location (optional)',
-                prefixIcon: Icon(Icons.place_outlined),
-              ),
-            ),
-            const SizedBox(height: 10),
-            DropdownButtonFormField<String>(
-              key: ValueKey(
-                'snippet-trip-$_selectedTripId-'
-                '${_editableTrips.map((trip) => trip.id).join('|')}',
-              ),
-              initialValue: _selectedTripId,
-              decoration: const InputDecoration(labelText: 'Adventure'),
-              items: [
-                for (final trip in _editableTrips)
-                  DropdownMenuItem(value: trip.id, child: Text(trip.name)),
-              ],
-              onChanged: enabled
-                  ? (value) => setState(() => _selectedTripId = value)
-                  : null,
-            ),
-            if (_editableTrips.isEmpty) ...[
-              const SizedBox(height: 10),
-              const Text(
-                'Create an adventure or request editor access to post snippets.',
-              ),
-            ],
-            const SizedBox(height: 16),
-            Wrap(
-              spacing: 10,
-              runSpacing: 10,
-              children: [
-                FilledButton.icon(
-                  onPressed: enabled ? _postSnippet : null,
-                  icon: _isPosting
-                      ? const SizedBox.square(
-                          dimension: 18,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                      : const Icon(Icons.send_outlined),
-                  label: const Text('Post Quick Snippet'),
-                ),
-                OutlinedButton.icon(
-                  onPressed: enabled ? _saveLocally : null,
-                  icon: const Icon(Icons.save_outlined),
-                  label: const Text('Save locally'),
-                ),
-              ],
-            ),
-          ],
-        ),
       ),
     );
   }
@@ -1809,11 +1752,13 @@ class _ActivityCard extends StatelessWidget {
   const _ActivityCard({
     required this.activity,
     required this.now,
+    required this.repository,
     required this.onTap,
   });
 
   final AdventureActivity activity;
   final DateTime now;
+  final TripRepository repository;
   final VoidCallback onTap;
 
   @override
@@ -1903,6 +1848,14 @@ class _ActivityCard extends StatelessWidget {
                     ),
                     const SizedBox(height: 4),
                     Text(message, maxLines: 3, overflow: TextOverflow.ellipsis),
+                    if (snippet != null) ...[
+                      const SizedBox(height: 10),
+                      _SnippetPhoto(
+                        repository: repository,
+                        tripId: activity.trip.id,
+                        snippetId: snippet.id,
+                      ),
+                    ],
                     if (snippet != null && snippet.location.isNotEmpty) ...[
                       const SizedBox(height: 8),
                       Row(
@@ -1939,6 +1892,60 @@ class _ActivityCard extends StatelessWidget {
           ),
         ),
       ),
+    );
+  }
+}
+
+class _SnippetPhoto extends StatefulWidget {
+  const _SnippetPhoto({
+    required this.repository,
+    required this.tripId,
+    required this.snippetId,
+  });
+
+  final TripRepository repository;
+  final String tripId;
+  final String snippetId;
+
+  @override
+  State<_SnippetPhoto> createState() => _SnippetPhotoState();
+}
+
+class _SnippetPhotoState extends State<_SnippetPhoto> {
+  late Future<Uint8List?> _photo = _loadPhoto();
+
+  Future<Uint8List?> _loadPhoto() => widget.repository.getSnippetPhoto(
+    tripId: widget.tripId,
+    snippetId: widget.snippetId,
+  );
+
+  @override
+  void didUpdateWidget(covariant _SnippetPhoto oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.tripId != widget.tripId ||
+        oldWidget.snippetId != widget.snippetId) {
+      _photo = _loadPhoto();
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<Uint8List?>(
+      future: _photo,
+      builder: (context, snapshot) {
+        final bytes = snapshot.data;
+        if (bytes == null || bytes.isEmpty) return const SizedBox.shrink();
+        return ClipRRect(
+          borderRadius: BorderRadius.circular(14),
+          child: Image.memory(
+            bytes,
+            width: double.infinity,
+            height: 180,
+            fit: BoxFit.cover,
+            semanticLabel: 'Quick Snippet photo',
+          ),
+        );
+      },
     );
   }
 }
@@ -2212,7 +2219,7 @@ class _CirclePageState extends State<_CirclePage> {
       builder: (context) => AlertDialog(
         title: const Text('Remove from Circle?'),
         content: Text(
-          '${person.displayName} will be removed from your Circle. Existing adventure access is not changed.',
+          '${person.displayName} will be removed from your Circle. Access granted through the Circle connection will also be removed.',
         ),
         actions: [
           TextButton(
@@ -2241,7 +2248,7 @@ class _CirclePageState extends State<_CirclePage> {
       builder: (context) => AlertDialog(
         title: const Text('Block this person?'),
         content: Text(
-          '${person.displayName} will be removed from your Circle and cannot send you requests. Existing adventure access is not changed.',
+          '${person.displayName} will be removed from your Circle, lose Circle-granted adventure access, and cannot send you requests.',
         ),
         actions: [
           TextButton(
@@ -2317,7 +2324,7 @@ class _CirclePageState extends State<_CirclePage> {
           ),
           const SizedBox(height: 8),
           const Text(
-            'Circle connections make people easier to find. Adventure access remains separate and private.',
+            'Circle connections are mutual. When accepted, both people can view each other’s adventures.',
           ),
           const SizedBox(height: 20),
           _buildIdentityCard(context, state.profile),
@@ -3192,7 +3199,7 @@ class _ProfilePageState extends State<_ProfilePage> {
             trailing: const Icon(Icons.chevron_right),
             onTap: () => _showInformation(
               'Help and support',
-              'Use Adventures to create private trips and journal entries. Use Circle to connect with trusted people by TrekIt ID. Circle connections do not automatically grant adventure access.\n\nIf something does not save, check your connection and retry. Quick Snippets saved locally remain in the waiting queue until posted or discarded.',
+              'Use Adventures to create private trips and journal entries. Use Circle to connect with trusted people by TrekIt ID. Accepted Circle connections can view each other’s adventures.\n\nIf something does not save, check your connection and retry. Quick Snippets saved locally remain in the waiting queue until posted or discarded.',
             ),
           ),
           const Divider(height: 1),
@@ -3202,7 +3209,7 @@ class _ProfilePageState extends State<_ProfilePage> {
             trailing: const Icon(Icons.chevron_right),
             onTap: () => _showInformation(
               'Privacy summary',
-              'TrekIt is private by default. There is no public feed or public profile directory. Adventure owners control membership, Circle relationships remain separate from adventure access, and blocked users cannot send new Circle requests. You can export or delete your account data from Profile.',
+              'TrekIt is private by default. There is no public feed or public profile directory. Accepted Circle relationships grant mutual viewer access to adventures, and blocked users cannot send new Circle requests. You can export or delete your account data from Profile.',
             ),
           ),
           const Divider(height: 1),

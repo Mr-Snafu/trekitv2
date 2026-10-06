@@ -152,6 +152,116 @@ function userCircleRef(userId, collection, otherUserId) {
       .collection(collection).doc(otherUserId);
 }
 
+async function grantOwnedTripAccess(ownerId, circleMemberId) {
+  const trips = await db.collection("trips")
+      .where("ownerId", "==", ownerId)
+      .limit(400)
+      .get();
+  if (trips.empty) return;
+
+  const memberRefs = trips.docs.map((trip) =>
+    trip.ref.collection("members").doc(circleMemberId));
+  const memberships = await db.getAll(...memberRefs);
+  const batch = db.batch();
+  let writes = 0;
+  for (let index = 0; index < memberRefs.length; index++) {
+    if (memberships[index].exists) continue;
+    batch.set(memberRefs[index], {
+      userId: circleMemberId,
+      role: "viewer",
+      createdBy: ownerId,
+      accessSource: "circle",
+      createdAt: FieldValue.serverTimestamp(),
+    });
+    writes++;
+  }
+  if (writes > 0) await batch.commit();
+}
+
+async function grantMutualCircleAdventureAccess(userId, otherUserId) {
+  await Promise.all([
+    grantOwnedTripAccess(userId, otherUserId),
+    grantOwnedTripAccess(otherUserId, userId),
+  ]);
+}
+
+async function revokeOwnedCircleTripAccess(ownerId, circleMemberId) {
+  const trips = await db.collection("trips")
+      .where("ownerId", "==", ownerId)
+      .limit(400)
+      .get();
+  if (trips.empty) return;
+  const memberRefs = trips.docs.map((trip) =>
+    trip.ref.collection("members").doc(circleMemberId));
+  const memberships = await db.getAll(...memberRefs);
+  const batch = db.batch();
+  let writes = 0;
+  for (let index = 0; index < memberRefs.length; index++) {
+    if (!memberships[index].exists ||
+        memberships[index].get("accessSource") !== "circle") continue;
+    batch.delete(memberRefs[index]);
+    writes++;
+  }
+  if (writes > 0) await batch.commit();
+}
+
+async function revokeMutualCircleAdventureAccess(userId, otherUserId) {
+  await Promise.all([
+    revokeOwnedCircleTripAccess(userId, otherUserId),
+    revokeOwnedCircleTripAccess(otherUserId, userId),
+  ]);
+}
+
+async function repairCircleRelationships(userId) {
+  const userRef = db.collection("users").doc(userId);
+  const [direct, mirrored] = await Promise.all([
+    userRef.collection("circle").limit(100).get(),
+    db.collectionGroup("circle")
+        .where("userId", "==", userId)
+        .limit(100)
+        .get(),
+  ]);
+  const otherUserIds = new Set(direct.docs.map((item) => item.get("userId")));
+  for (const item of mirrored.docs) {
+    const owner = item.ref.parent.parent;
+    if (owner) otherUserIds.add(owner.id);
+  }
+  otherUserIds.delete(userId);
+
+  const self = await ensureCircleProfile(userId);
+  await Promise.all([...otherUserIds].map(async (otherUserId) => {
+    if (typeof otherUserId !== "string" || otherUserId.length > 128) return;
+    const [selfBlocked, otherBlocked] = await Promise.all([
+      userCircleRef(userId, "blocked", otherUserId).get(),
+      userCircleRef(otherUserId, "blocked", userId).get(),
+    ]);
+    if (selfBlocked.exists || otherBlocked.exists) return;
+
+    const other = await ensureCircleProfile(otherUserId);
+    const selfCircleRef = userCircleRef(userId, "circle", otherUserId);
+    const otherCircleRef = userCircleRef(otherUserId, "circle", userId);
+    const [selfCircle, otherCircle] = await Promise.all([
+      selfCircleRef.get(),
+      otherCircleRef.get(),
+    ]);
+    const batch = db.batch();
+    if (!selfCircle.exists) {
+      batch.set(selfCircleRef, {
+        ...other,
+        createdAt: FieldValue.serverTimestamp(),
+      });
+    }
+    if (!otherCircle.exists) {
+      batch.set(otherCircleRef, {
+        ...self,
+        createdAt: FieldValue.serverTimestamp(),
+      });
+    }
+    if (!selfCircle.exists || !otherCircle.exists) await batch.commit();
+    await grantMutualCircleAdventureAccess(userId, otherUserId);
+  }));
+}
+
 function profileResult(user, data = {}) {
   return {
     userId: user.uid,
@@ -378,6 +488,35 @@ exports.notifyAdventureShared = onDocumentCreated(
     },
 );
 
+exports.shareNewTripWithCircle = onDocumentCreated(
+    firestoreEventOptions("trips/{tripId}"),
+    async (event) => {
+      const trip = event.data?.data();
+      const ownerId = trip?.ownerId;
+      if (typeof ownerId !== "string") return;
+      const circle = await db.collection("users").doc(ownerId)
+          .collection("circle").limit(100).get();
+      if (circle.empty) return;
+      const memberRefs = circle.docs.map((person) =>
+        event.data.ref.collection("members").doc(person.id));
+      const memberships = await db.getAll(...memberRefs);
+      const batch = db.batch();
+      let writes = 0;
+      for (let index = 0; index < memberRefs.length; index++) {
+        if (memberships[index].exists) continue;
+        batch.set(memberRefs[index], {
+          userId: circle.docs[index].id,
+          role: "viewer",
+          createdBy: ownerId,
+          accessSource: "circle",
+          createdAt: FieldValue.serverTimestamp(),
+        });
+        writes++;
+      }
+      if (writes > 0) await batch.commit();
+    },
+);
+
 exports.getProfileState = onCall(options, async (request) => {
   const userId = requireUser(request);
   const [user, profile] = await Promise.all([
@@ -535,6 +674,7 @@ exports.exportMyData = onCall(options, async (request) => {
 exports.getCircleState = onCall(options, async (request) => {
   const userId = requireUser(request);
   const profile = await ensureCircleProfile(userId);
+  await repairCircleRelationships(userId);
   const userRef = db.collection("users").doc(userId);
   const [circle, incoming, outgoing, blocked] = await Promise.all([
     userRef.collection("circle").limit(100).get(),
@@ -648,6 +788,7 @@ exports.acceptCircleRequest = onCall(options, async (request) => {
     transaction.delete(
         userCircleRef(otherUserId, "outgoingRequests", userId));
   });
+  await grantMutualCircleAdventureAccess(userId, otherUserId);
   return {accepted: true};
 });
 
@@ -677,6 +818,7 @@ exports.removeCircleMember = onCall(options, async (request) => {
   batch.delete(userCircleRef(userId, "circle", otherUserId));
   batch.delete(userCircleRef(otherUserId, "circle", userId));
   await batch.commit();
+  await revokeMutualCircleAdventureAccess(userId, otherUserId);
   return {removed: true};
 });
 
@@ -712,6 +854,7 @@ exports.blockCircleMember = onCall(options, async (request) => {
     batch.delete(userCircleRef(owner, collection, target));
   }
   await batch.commit();
+  await revokeMutualCircleAdventureAccess(userId, otherUserId);
   return {blocked: true};
 });
 
@@ -793,10 +936,18 @@ exports.deleteTrip = onCall(options, async (request) => {
   const ownerId = requireUser(request);
   const tripId = requireString(request.data?.tripId, "Trip", 128);
   const {tripRef, trip} = await requireTripOwner(tripId, ownerId);
-  const entries = await tripRef.collection("entries").get();
+  const [entries, snippets] = await Promise.all([
+    tripRef.collection("entries").get(),
+    tripRef.collection("snippets").get(),
+  ]);
   const imagePaths = entries.docs
       .map((entry) => entry.get("imagePath"))
       .filter((path) => typeof path === "string");
+  imagePaths.push(...snippets.docs
+      .filter((snippet) => typeof snippet.get("authorId") === "string")
+      .map((snippet) =>
+        `users/${snippet.get("authorId")}/trips/${tripId}/entries/` +
+        `${snippet.id}/photo`));
   const coverImagePath = trip.get("coverImagePath");
   if (typeof coverImagePath === "string") {
     imagePaths.push(coverImagePath);
@@ -1000,6 +1151,80 @@ exports.getEntryPhoto = onRequest({
     return;
   }
 
+  const file = storage.bucket().file(imagePath);
+  try {
+    const [metadata] = await file.getMetadata();
+    response.set("Content-Type", metadata.contentType || "image/jpeg");
+    response.set("Cache-Control", "private, max-age=300");
+    file.createReadStream()
+        .on("error", () => {
+          if (!response.headersSent) {
+            response.status(404).send("Photo not found.");
+          } else {
+            response.end();
+          }
+        })
+        .pipe(response);
+  } catch (_) {
+    response.status(404).send("Photo not found.");
+  }
+});
+
+exports.getSnippetPhoto = onRequest({
+  region: "us-central1",
+  cors: browserCors,
+}, async (request, response) => {
+  if (request.method !== "GET") {
+    response.status(405).send("Method not allowed.");
+    return;
+  }
+
+  const authorization = request.get("authorization") || "";
+  if (!authorization.startsWith("Bearer ")) {
+    response.status(401).send("Sign in to continue.");
+    return;
+  }
+
+  let userId;
+  try {
+    userId = (await auth.verifyIdToken(authorization.slice(7))).uid;
+  } catch (_) {
+    response.status(401).send("Your session is no longer valid.");
+    return;
+  }
+
+  let tripId;
+  let snippetId;
+  try {
+    tripId = requireString(request.query.tripId, "Trip", 128);
+    snippetId = requireString(request.query.snippetId, "Snippet", 128);
+  } catch (error) {
+    response.status(400).send(error.message);
+    return;
+  }
+
+  const tripRef = db.collection("trips").doc(tripId);
+  const [trip, membership, snippet] = await Promise.all([
+    tripRef.get(),
+    tripRef.collection("members").doc(userId).get(),
+    tripRef.collection("snippets").doc(snippetId).get(),
+  ]);
+  if (!trip.exists || !snippet.exists) {
+    response.status(404).send("Photo not found.");
+    return;
+  }
+  if (trip.get("ownerId") !== userId && !membership.exists) {
+    response.status(403).send("You do not have access to this photo.");
+    return;
+  }
+
+  const authorId = snippet.get("authorId");
+  if (typeof authorId !== "string") {
+    response.status(404).send("Photo not found.");
+    return;
+  }
+  const imagePath = `users/${authorId}/trips/${tripId}/entries/` +
+      `${snippetId}/photo`;
   const file = storage.bucket().file(imagePath);
   try {
     const [metadata] = await file.getMetadata();

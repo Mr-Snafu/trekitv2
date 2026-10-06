@@ -361,6 +361,8 @@ class TripRepository {
     required String text,
     required String location,
     required DateTime capturedAt,
+    Uint8List? imageBytes,
+    String? imageContentType,
   }) async {
     final trimmedText = text.trim();
     final trimmedLocation = location.trim();
@@ -376,12 +378,60 @@ class TripRepository {
       throw ArgumentError('A quick snippet cannot be dated in the future.');
     }
 
-    await _trips.doc(tripId).collection('snippets').doc(snippetId).set({
-      'text': trimmedText,
-      if (trimmedLocation.isNotEmpty) 'location': trimmedLocation,
-      'authorId': authorId,
-      'capturedAt': Timestamp.fromDate(capturedAt),
-    });
+    Reference? imageReference;
+    if (imageBytes != null) {
+      if (imageBytes.isEmpty || imageBytes.length > maxImageBytes) {
+        throw ArgumentError('The photo must be between 1 byte and 25 MB.');
+      }
+      final imagePath =
+          'users/$authorId/trips/$tripId/entries/$snippetId/photo';
+      imageReference = _storage.ref(imagePath);
+      await imageReference.putData(
+        imageBytes,
+        SettableMetadata(contentType: imageContentType ?? 'image/jpeg'),
+      );
+    }
+
+    try {
+      await _trips.doc(tripId).collection('snippets').doc(snippetId).set({
+        'text': trimmedText,
+        if (trimmedLocation.isNotEmpty) 'location': trimmedLocation,
+        'authorId': authorId,
+        'capturedAt': Timestamp.fromDate(capturedAt),
+      });
+    } catch (_) {
+      if (imageReference != null) {
+        try {
+          await imageReference.delete();
+        } catch (_) {
+          // Preserve the Firestore error if photo cleanup cannot complete.
+        }
+      }
+      rethrow;
+    }
+  }
+
+  Future<Uint8List?> getSnippetPhoto({
+    required String tripId,
+    required String snippetId,
+  }) async {
+    final token = await _auth.currentUser?.getIdToken();
+    if (token == null) return null;
+    final response = await _httpClient.get(
+      Uri.https(
+        'us-central1-trekit-10e88.cloudfunctions.net',
+        '/getSnippetPhoto',
+        {'tripId': tripId, 'snippetId': snippetId},
+      ),
+      headers: {'Authorization': 'Bearer $token'},
+    );
+    if (response.statusCode == 404) return null;
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw TripServiceException(
+        response.body.isEmpty ? 'Photo unavailable.' : response.body,
+      );
+    }
+    return response.bodyBytes;
   }
 
   Stream<List<JournalEntry>> _watchRecentEntries(String tripId) {
