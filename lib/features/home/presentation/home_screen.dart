@@ -11,6 +11,7 @@ import 'package:qr_flutter/qr_flutter.dart';
 import '../../../core/drafts/local_draft_store.dart';
 import '../../../core/install/app_install_service.dart';
 import '../../../core/time/friendly_time.dart';
+import '../../../core/widgets/quick_capture_button.dart';
 import '../../auth/data/auth_service.dart';
 import '../../capture/presentation/quick_capture_screen.dart';
 import '../../circle/data/circle_repository.dart';
@@ -807,15 +808,9 @@ class _HomeScreenState extends State<HomeScreen> {
                   )
                 : const Icon(Icons.logout),
           ),
-          IconButton(
-            onPressed: _isCapturingMoment ? null : _quickCapture,
-            tooltip: 'Quick capture',
-            icon: _isCapturingMoment
-                ? const SizedBox.square(
-                    dimension: 20,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  )
-                : const Icon(Icons.camera_alt_outlined),
+          QuickCaptureButton(
+            onPressed: _quickCapture,
+            isLoading: _isCapturingMoment,
           ),
         ],
       ),
@@ -1535,7 +1530,7 @@ class _FeedPageState extends State<_FeedPage> {
               );
             },
           ),
-          const SizedBox(width: 6),
+          QuickCaptureButton(onPressed: widget.onQuickCapture),
         ],
       ),
       body: SafeArea(
@@ -1645,11 +1640,6 @@ class _FeedPageState extends State<_FeedPage> {
                         );
                       },
                     ),
-                  IconButton(
-                    tooltip: 'Quick capture',
-                    onPressed: widget.onQuickCapture,
-                    icon: const Icon(Icons.camera_alt_outlined),
-                  ),
                 ],
               ),
       ),
@@ -2294,11 +2284,7 @@ class _CirclePageState extends State<_CirclePage> {
             onPressed: _isLoading ? null : _load,
             icon: const Icon(Icons.refresh),
           ),
-          IconButton(
-            tooltip: 'Quick capture',
-            onPressed: widget.onQuickCapture,
-            icon: const Icon(Icons.camera_alt_outlined),
-          ),
+          QuickCaptureButton(onPressed: widget.onQuickCapture),
         ],
       ),
       body: SafeArea(child: _buildBody(context)),
@@ -2895,11 +2881,7 @@ class _ProfilePageState extends State<_ProfilePage> {
             onPressed: _isLoading ? null : _load,
             icon: const Icon(Icons.refresh),
           ),
-          IconButton(
-            tooltip: 'Quick capture',
-            onPressed: widget.onQuickCapture,
-            icon: const Icon(Icons.camera_alt_outlined),
-          ),
+          QuickCaptureButton(onPressed: widget.onQuickCapture),
         ],
       ),
       body: SafeArea(child: _buildBody(context)),

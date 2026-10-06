@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 
 import '../../../core/drafts/local_draft_store.dart';
+import '../../../core/widgets/quick_capture_button.dart';
 import '../../capture/presentation/quick_capture_screen.dart';
 import '../data/trip_repository.dart';
 import '../domain/adventure_comment.dart';
@@ -275,15 +276,9 @@ class _TripDetailScreenState extends State<TripDetailScreen> {
               icon: const Icon(Icons.group_add_outlined),
             ),
           if (_canCreateEntry)
-            IconButton(
-              onPressed: _isQuickCapturing ? null : _quickCapture,
-              tooltip: 'Quick capture',
-              icon: _isQuickCapturing
-                  ? const SizedBox.square(
-                      dimension: 20,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
-                  : const Icon(Icons.camera_alt_outlined),
+            QuickCaptureButton(
+              onPressed: _quickCapture,
+              isLoading: _isQuickCapturing,
             ),
         ],
       ),
