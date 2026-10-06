@@ -3,6 +3,7 @@ import 'dart:typed_data';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
 
+import '../../../core/widgets/trekit_app_bar.dart';
 import '../domain/quick_capture_destination.dart';
 import '../../trips/data/trip_repository.dart';
 import '../../trips/domain/trip.dart';
@@ -132,7 +133,7 @@ class _QuickCaptureScreenState extends State<QuickCaptureScreen> {
     return PopScope(
       canPop: !_isUploading,
       child: Scaffold(
-        appBar: AppBar(title: const Text('Quick capture')),
+        appBar: const TrekItAppBar(title: Text('Quick Capture')),
         body: SafeArea(
           child: Form(
             key: _formKey,

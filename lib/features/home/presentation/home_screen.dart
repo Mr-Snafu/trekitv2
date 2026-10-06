@@ -12,6 +12,7 @@ import '../../../core/drafts/local_draft_store.dart';
 import '../../../core/install/app_install_service.dart';
 import '../../../core/time/friendly_time.dart';
 import '../../../core/widgets/quick_capture_button.dart';
+import '../../../core/widgets/trekit_app_bar.dart';
 import '../../auth/data/auth_service.dart';
 import '../../capture/presentation/quick_capture_screen.dart';
 import '../../circle/data/circle_repository.dart';
@@ -791,8 +792,8 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Widget _buildAdventuresPage(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Your adventures'),
+      appBar: TrekItAppBar(
+        title: const Text('Your Adventures'),
         actions: [
           QuickCaptureButton(
             onPressed: _quickCapture,
@@ -1510,17 +1511,8 @@ class _FeedPageState extends State<_FeedPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: Row(
-          children: [
-            ClipRRect(
-              borderRadius: BorderRadius.circular(10),
-              child: Image.asset('trekit-t.png', width: 38, height: 38),
-            ),
-            const SizedBox(width: 10),
-            const Text('TrekIt'),
-          ],
-        ),
+      appBar: TrekItAppBar(
+        title: const Text('TrekIt'),
         actions: [
           StreamBuilder<List<AppNotification>>(
             stream: widget.notificationRepository.watchNotifications(
@@ -2283,8 +2275,8 @@ class _CirclePageState extends State<_CirclePage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Circle'),
+      appBar: TrekItAppBar(
+        title: const Text('Your Circle'),
         actions: [
           IconButton(
             tooltip: 'Refresh Circle',
@@ -2880,8 +2872,8 @@ class _ProfilePageState extends State<_ProfilePage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Profile'),
+      appBar: TrekItAppBar(
+        title: const Text('Your Profile'),
         actions: [
           IconButton(
             tooltip: 'Refresh profile',

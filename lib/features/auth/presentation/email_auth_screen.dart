@@ -2,6 +2,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
 import '../../../core/theme/trekit_theme.dart';
+import '../../../core/widgets/trekit_app_bar.dart';
 import '../data/auth_service.dart';
 
 enum AuthMode { signIn, createAccount }
@@ -148,7 +149,10 @@ class _EmailAuthScreenState extends State<EmailAuthScreen> {
     final action = _isCreatingAccount ? 'Create account' : 'Sign in';
 
     return Scaffold(
-      appBar: AppBar(backgroundColor: TrekItColors.cream, title: Text(action)),
+      appBar: TrekItAppBar(
+        backgroundColor: TrekItColors.cream,
+        title: Text(action),
+      ),
       body: SafeArea(
         child: Center(
           child: SingleChildScrollView(

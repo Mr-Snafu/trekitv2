@@ -7,6 +7,7 @@ import 'package:image_picker/image_picker.dart';
 
 import '../../../core/drafts/local_draft_store.dart';
 import '../../../core/widgets/quick_capture_button.dart';
+import '../../../core/widgets/trekit_app_bar.dart';
 import '../../capture/presentation/quick_capture_screen.dart';
 import '../data/trip_repository.dart';
 import '../domain/adventure_comment.dart';
@@ -266,7 +267,7 @@ class _TripDetailScreenState extends State<TripDetailScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
+      appBar: TrekItAppBar(
         title: Text(widget.trip.name),
         actions: [
           if (_isOwner)
@@ -1711,7 +1712,7 @@ class _FullScreenPhoto extends StatelessWidget {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: Colors.black,
-      appBar: AppBar(
+      appBar: TrekItAppBar(
         backgroundColor: Colors.black,
         foregroundColor: Colors.white,
         title: Column(
