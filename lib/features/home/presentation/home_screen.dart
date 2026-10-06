@@ -12,6 +12,7 @@ import '../../../core/drafts/local_draft_store.dart';
 import '../../../core/install/app_install_service.dart';
 import '../../../core/time/friendly_time.dart';
 import '../../auth/data/auth_service.dart';
+import '../../capture/presentation/quick_capture_screen.dart';
 import '../../circle/data/circle_repository.dart';
 import '../../circle/domain/circle_invite.dart';
 import '../../circle/domain/circle_state.dart';
@@ -48,6 +49,7 @@ class _HomeScreenState extends State<HomeScreen> {
       NotificationRepository();
   late final PushNotificationService _pushNotificationService =
       PushNotificationService();
+  final _quickCameraPicker = ImagePicker();
   StreamSubscription<RemoteMessage>? _foregroundMessageSubscription;
   NotificationDestination? _pendingNotificationDestination =
       NotificationDestination.fromUri(Uri.base);
@@ -61,6 +63,7 @@ class _HomeScreenState extends State<HomeScreen> {
   TripSortOrder _sortOrder = TripSortOrder.recentlyUpdated;
   bool _isSigningOut = false;
   bool _isCreatingTrip = false;
+  bool _isCapturingMoment = false;
   bool _isSendingVerification = false;
   bool _isRefreshingVerification = false;
   bool _isDeletingAccount = false;
@@ -444,6 +447,64 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
+  Future<void> _quickCapture() async {
+    if (_isCapturingMoment) return;
+    setState(() => _isCapturingMoment = true);
+    try {
+      final image = await _quickCameraPicker.pickImage(
+        source: ImageSource.camera,
+        preferredCameraDevice: CameraDevice.rear,
+        imageQuality: 85,
+        maxWidth: 2400,
+      );
+      if (image == null || !mounted) return;
+      final bytes = await image.readAsBytes();
+      if (!mounted) return;
+      if (bytes.isEmpty || bytes.length > TripRepository.maxImageBytes) {
+        if (mounted) _showMessage('Choose a photo smaller than 25 MB.');
+        return;
+      }
+      final saved = await Navigator.of(context).push<bool>(
+        MaterialPageRoute(
+          builder: (_) => QuickCaptureScreen(
+            imageBytes: bytes,
+            imageContentType:
+                image.mimeType ?? _contentTypeForImageName(image.name),
+            userId: widget.user.uid,
+            trips: _editableTrips,
+            repository: _repository,
+          ),
+        ),
+      );
+      if (saved == true && mounted) {
+        setState(() {
+          _selectedIndex = 0;
+          _feedRevision++;
+        });
+        _showMessage('Moment saved to your adventure.');
+      }
+    } catch (error, stackTrace) {
+      debugPrint('Quick camera failed: $error\n$stackTrace');
+      if (mounted) {
+        _showMessage(
+          'The camera could not open. Check this browser’s camera permission and try again.',
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isCapturingMoment = false);
+    }
+  }
+
+  String _contentTypeForImageName(String fileName) {
+    final lowerName = fileName.toLowerCase();
+    if (lowerName.endsWith('.png')) return 'image/png';
+    if (lowerName.endsWith('.webp')) return 'image/webp';
+    if (lowerName.endsWith('.heic') || lowerName.endsWith('.heif')) {
+      return 'image/heic';
+    }
+    return 'image/jpeg';
+  }
+
   Future<void> _createQuickSnippet() async {
     final editableTrips = _editableTrips;
     if (editableTrips.isEmpty) {
@@ -746,6 +807,16 @@ class _HomeScreenState extends State<HomeScreen> {
                   )
                 : const Icon(Icons.logout),
           ),
+          IconButton(
+            onPressed: _isCapturingMoment ? null : _quickCapture,
+            tooltip: 'Quick capture',
+            icon: _isCapturingMoment
+                ? const SizedBox.square(
+                    dimension: 20,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Icon(Icons.camera_alt_outlined),
+          ),
         ],
       ),
       floatingActionButton: FloatingActionButton.extended(
@@ -931,16 +1002,19 @@ class _HomeScreenState extends State<HomeScreen> {
               error: snapshot.error,
               onOpenTrip: _openTrip,
               onOpenCircle: () => setState(() => _selectedIndex = 3),
+              onQuickCapture: _isCapturingMoment ? null : _quickCapture,
               onCreate: _showCreateMenu,
             ),
             1 => _buildAdventuresPage(context),
             3 => _CirclePage(
               repository: _circleRepository,
               initialTrekId: _circleInviteTrekId,
+              onQuickCapture: _isCapturingMoment ? null : _quickCapture,
             ),
             4 => _ProfilePage(
               repository: _profileRepository,
               pushNotificationService: _pushNotificationService,
+              onQuickCapture: _isCapturingMoment ? null : _quickCapture,
               isSigningOut: _isSigningOut,
               isDeletingAccount: _isDeletingAccount,
               onOpenSettings: _openAccountSettings,
@@ -1221,6 +1295,7 @@ class _FeedPage extends StatefulWidget {
     required this.error,
     required this.onOpenTrip,
     required this.onOpenCircle,
+    required this.onQuickCapture,
     required this.onCreate,
   });
 
@@ -1232,6 +1307,7 @@ class _FeedPage extends StatefulWidget {
   final Object? error;
   final ValueChanged<Trip> onOpenTrip;
   final VoidCallback onOpenCircle;
+  final VoidCallback? onQuickCapture;
   final VoidCallback onCreate;
 
   @override
@@ -1569,6 +1645,11 @@ class _FeedPageState extends State<_FeedPage> {
                         );
                       },
                     ),
+                  IconButton(
+                    tooltip: 'Quick capture',
+                    onPressed: widget.onQuickCapture,
+                    icon: const Icon(Icons.camera_alt_outlined),
+                  ),
                 ],
               ),
       ),
@@ -2041,9 +2122,14 @@ class _FeedEmptyState extends StatelessWidget {
 }
 
 class _CirclePage extends StatefulWidget {
-  const _CirclePage({required this.repository, this.initialTrekId});
+  const _CirclePage({
+    required this.repository,
+    required this.onQuickCapture,
+    this.initialTrekId,
+  });
 
   final CircleRepository repository;
+  final VoidCallback? onQuickCapture;
   final String? initialTrekId;
 
   @override
@@ -2207,6 +2293,11 @@ class _CirclePageState extends State<_CirclePage> {
             tooltip: 'Refresh Circle',
             onPressed: _isLoading ? null : _load,
             icon: const Icon(Icons.refresh),
+          ),
+          IconButton(
+            tooltip: 'Quick capture',
+            onPressed: widget.onQuickCapture,
+            icon: const Icon(Icons.camera_alt_outlined),
           ),
         ],
       ),
@@ -2559,6 +2650,7 @@ class _ProfilePage extends StatefulWidget {
   const _ProfilePage({
     required this.repository,
     required this.pushNotificationService,
+    required this.onQuickCapture,
     required this.isSigningOut,
     required this.isDeletingAccount,
     required this.onOpenSettings,
@@ -2571,6 +2663,7 @@ class _ProfilePage extends StatefulWidget {
 
   final ProfileRepository repository;
   final PushNotificationService pushNotificationService;
+  final VoidCallback? onQuickCapture;
   final bool isSigningOut;
   final bool isDeletingAccount;
   final VoidCallback onOpenSettings;
@@ -2801,6 +2894,11 @@ class _ProfilePageState extends State<_ProfilePage> {
             tooltip: 'Refresh profile',
             onPressed: _isLoading ? null : _load,
             icon: const Icon(Icons.refresh),
+          ),
+          IconButton(
+            tooltip: 'Quick capture',
+            onPressed: widget.onQuickCapture,
+            icon: const Icon(Icons.camera_alt_outlined),
           ),
         ],
       ),

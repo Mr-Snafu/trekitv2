@@ -17,7 +17,7 @@ This document is the source of truth for TrekIt V2 development. TrekIt is a priv
 | --- | --- | --- |
 | Feed | Private, newest-first activity from accessible adventures | Live with activity grouping, destination-aware inbox and browser notifications, and a local Quick Snippet retry queue |
 | Adventures | Organize owned and shared trips and open their journals | Live with lifecycle groups, cover images, search, filters, sorting, editing, deletion, sharing, entries, and photos |
-| Create | Start an adventure or capture content from anywhere | Live with adventure, journal-entry, photo-first memory, and Quick Snippet flows |
+| Create | Start an adventure or capture content from anywhere | Live with adventure, journal-entry, global quick-camera, photo-first memory, and Quick Snippet flows |
 | Circle | Manage trusted connections, requests, blocking, and TrekIt IDs | Live with private IDs, real invite links and QR codes, requests, cooldowns, remove, block, and unblock controls |
 | Profile | Identity, verification, settings, privacy, export, installation, and account controls | Live with editable identity, saved preferences, install guidance, JSON export, help/legal summaries, and account controls |
 
@@ -40,6 +40,7 @@ This document is the source of truth for TrekIt V2 development. TrekIt is a priv
 ### Create
 
 - Offer context-aware creation for adventures, journal entries, photos, and quick snippets. *(Live)*
+- Keep a global camera action available throughout the signed-in experience; capture first, then select the destination only when needed. *(Live)*
 - Allow a user to choose the destination adventure without navigating away first. *(Live)*
 - Preserve unsent adventure and journal text, dates, destination context, and Quick Snippets when connectivity is interrupted. Photos must be reselected after recovery for privacy and browser compatibility. *(Live)*
 
@@ -74,5 +75,6 @@ This document is the source of truth for TrekIt V2 development. TrekIt is a priv
 12. Route Circle and adventure notifications directly to their private in-app destination. *(Live)*
 13. Replace the Circle invite placeholder with real links, QR codes, and safe sign-in handoff. *(Live)*
 14. Polish the mobile web app for installation while keeping push and offline app caching on separate service-worker scopes. *(Live)*
+15. Add global photo quick capture with Live-adventure selection, upload progress, and retry without retaking the photo. *(Live)*
 
 Every phase should be checked against this blueprint, tested at mobile width, deployed through a preview, verified against the live build, and backed up to GitHub.

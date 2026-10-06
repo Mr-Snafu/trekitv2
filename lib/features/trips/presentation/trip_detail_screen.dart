@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 
 import '../../../core/drafts/local_draft_store.dart';
+import '../../capture/presentation/quick_capture_screen.dart';
 import '../data/trip_repository.dart';
 import '../domain/adventure_comment.dart';
 import '../domain/journal_entry.dart';
@@ -33,7 +34,9 @@ class TripDetailScreen extends StatefulWidget {
 }
 
 class _TripDetailScreenState extends State<TripDetailScreen> {
+  final _quickCameraPicker = ImagePicker();
   bool _isCreatingEntry = false;
+  bool _isQuickCapturing = false;
   double? _uploadProgress;
   final Set<String> _busyEntryIds = <String>{};
 
@@ -123,6 +126,60 @@ class _TripDetailScreenState extends State<TripDetailScreen> {
         });
       }
     }
+  }
+
+  Future<void> _quickCapture() async {
+    if (_isQuickCapturing || !_canCreateEntry) return;
+    setState(() => _isQuickCapturing = true);
+    try {
+      final image = await _quickCameraPicker.pickImage(
+        source: ImageSource.camera,
+        preferredCameraDevice: CameraDevice.rear,
+        imageQuality: 85,
+        maxWidth: 2400,
+      );
+      if (image == null || !mounted) return;
+      final bytes = await image.readAsBytes();
+      if (!mounted) return;
+      if (bytes.isEmpty || bytes.length > TripRepository.maxImageBytes) {
+        if (mounted) _showMessage('Choose a photo smaller than 25 MB.');
+        return;
+      }
+      final saved = await Navigator.of(context).push<bool>(
+        MaterialPageRoute(
+          builder: (_) => QuickCaptureScreen(
+            imageBytes: bytes,
+            imageContentType:
+                image.mimeType ?? _contentTypeForImageName(image.name),
+            userId: widget.userId,
+            trips: [widget.trip],
+            repository: widget.repository,
+          ),
+        ),
+      );
+      if (saved == true && mounted) {
+        _showMessage('Moment saved to ${widget.trip.name}.');
+      }
+    } catch (error, stackTrace) {
+      debugPrint('Quick camera failed: $error\n$stackTrace');
+      if (mounted) {
+        _showMessage(
+          'The camera could not open. Check this browser’s camera permission and try again.',
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isQuickCapturing = false);
+    }
+  }
+
+  String _contentTypeForImageName(String fileName) {
+    final lowerName = fileName.toLowerCase();
+    if (lowerName.endsWith('.png')) return 'image/png';
+    if (lowerName.endsWith('.webp')) return 'image/webp';
+    if (lowerName.endsWith('.heic') || lowerName.endsWith('.heif')) {
+      return 'image/heic';
+    }
+    return 'image/jpeg';
   }
 
   Future<void> _editEntry(JournalEntry entry) async {
@@ -216,6 +273,17 @@ class _TripDetailScreenState extends State<TripDetailScreen> {
               onPressed: _manageSharing,
               tooltip: 'Manage access',
               icon: const Icon(Icons.group_add_outlined),
+            ),
+          if (_canCreateEntry)
+            IconButton(
+              onPressed: _isQuickCapturing ? null : _quickCapture,
+              tooltip: 'Quick capture',
+              icon: _isQuickCapturing
+                  ? const SizedBox.square(
+                      dimension: 20,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.camera_alt_outlined),
             ),
         ],
       ),
