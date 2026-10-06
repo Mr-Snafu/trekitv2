@@ -861,8 +861,46 @@ exports.blockCircleMember = onCall(options, async (request) => {
 exports.unblockCircleMember = onCall(options, async (request) => {
   const userId = requireUser(request);
   const otherUserId = requireString(request.data?.userId, "Person", 128);
-  await userCircleRef(userId, "blocked", otherUserId).delete();
-  return {unblocked: true};
+  const [self, other] = await Promise.all([
+    ensureCircleProfile(userId),
+    ensureCircleProfile(otherUserId),
+  ]);
+  const blockedRef = userCircleRef(userId, "blocked", otherUserId);
+  const otherBlockedRef = userCircleRef(otherUserId, "blocked", userId);
+  const selfCircleRef = userCircleRef(userId, "circle", otherUserId);
+  const otherCircleRef = userCircleRef(otherUserId, "circle", userId);
+
+  const reconnected = await db.runTransaction(async (transaction) => {
+    const [blocked, otherBlocked, selfCircle, otherCircle] =
+      await Promise.all([
+        transaction.get(blockedRef),
+        transaction.get(otherBlockedRef),
+        transaction.get(selfCircleRef),
+        transaction.get(otherCircleRef),
+      ]);
+    const alreadyConnected = selfCircle.exists && otherCircle.exists;
+    if (!blocked.exists && !alreadyConnected) {
+      throw new HttpsError(
+          "not-found", "That person is no longer blocked.");
+    }
+
+    if (blocked.exists) transaction.delete(blockedRef);
+    if (otherBlocked.exists) return false;
+
+    const now = FieldValue.serverTimestamp();
+    if (!selfCircle.exists) {
+      transaction.set(selfCircleRef, {...other, createdAt: now});
+    }
+    if (!otherCircle.exists) {
+      transaction.set(otherCircleRef, {...self, createdAt: now});
+    }
+    return true;
+  });
+
+  if (reconnected) {
+    await grantMutualCircleAdventureAccess(userId, otherUserId);
+  }
+  return {unblocked: true, reconnected};
 });
 
 async function requireTripOwner(tripId, userId) {
