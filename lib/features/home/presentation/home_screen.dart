@@ -31,6 +31,7 @@ import '../../trips/domain/adventure_activity.dart';
 import '../../trips/domain/quick_snippet.dart';
 import '../../trips/domain/trip.dart';
 import '../../trips/domain/trip_organizer.dart';
+import '../../trips/presentation/trip_category_style.dart';
 import '../../trips/presentation/trip_detail_screen.dart';
 
 class HomeScreen extends StatefulWidget {
@@ -62,6 +63,7 @@ class _HomeScreenState extends State<HomeScreen> {
   List<Trip> _latestTrips = const [];
   int _selectedIndex = 0;
   TripOwnershipFilter _ownershipFilter = TripOwnershipFilter.all;
+  TripCategory? _categoryFilter;
   TripSortOrder _sortOrder = TripSortOrder.recentlyUpdated;
   bool _isSigningOut = false;
   bool _isCreatingTrip = false;
@@ -169,6 +171,7 @@ class _HomeScreenState extends State<HomeScreen> {
     _searchController.clear();
     setState(() {
       _ownershipFilter = TripOwnershipFilter.all;
+      _categoryFilter = null;
       _sortOrder = TripSortOrder.recentlyUpdated;
     });
   }
@@ -607,6 +610,26 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
+  Future<void> _changeTripCategory(Trip trip) async {
+    final category = await showModalBottomSheet<TripCategory>(
+      context: context,
+      showDragHandle: true,
+      builder: (_) => _CategoryPickerSheet(selected: trip.category),
+    );
+    if (category == null || category == trip.category || !mounted) return;
+
+    setState(() => _busyTripIds.add(trip.id));
+    try {
+      await _repository.updateTripCategory(tripId: trip.id, category: category);
+      if (mounted) _showMessage('Category changed to ${category.label}.');
+    } on FirebaseException catch (error) {
+      debugPrint('Category update failed (${error.code}): ${error.message}');
+      if (mounted) _showMessage('The category could not be changed.');
+    } finally {
+      if (mounted) setState(() => _busyTripIds.remove(trip.id));
+    }
+  }
+
   Future<void> _deleteTrip(Trip trip) async {
     final confirmed = await showDialog<bool>(
       context: context,
@@ -720,6 +743,8 @@ class _HomeScreenState extends State<HomeScreen> {
                               switch (action) {
                                 case _TripAction.edit:
                                   _editTrip(trip);
+                                case _TripAction.category:
+                                  _changeTripCategory(trip);
                                 case _TripAction.delete:
                                   _deleteTrip(trip);
                               }
@@ -730,6 +755,13 @@ class _HomeScreenState extends State<HomeScreen> {
                                 child: ListTile(
                                   leading: Icon(Icons.edit_outlined),
                                   title: Text('Edit adventure'),
+                                ),
+                              ),
+                              PopupMenuItem(
+                                value: _TripAction.category,
+                                child: ListTile(
+                                  leading: Icon(Icons.category_outlined),
+                                  title: Text('Change category'),
                                 ),
                               ),
                               PopupMenuItem(
@@ -748,9 +780,11 @@ class _HomeScreenState extends State<HomeScreen> {
                       spacing: 12,
                       runSpacing: 8,
                       children: [
-                        _TripFact(
-                          icon: Icons.category_outlined,
-                          label: trip.category.label,
+                        _CategoryBadge(
+                          category: trip.category,
+                          onPressed: trip.accessRole == 'owner' && !isBusy
+                              ? () => _changeTripCategory(trip)
+                              : null,
                         ),
                         if (trip.location.isNotEmpty)
                           _TripFact(
@@ -873,6 +907,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     trips,
                     query: _searchController.text,
                     filter: _ownershipFilter,
+                    category: _categoryFilter,
                     sortOrder: _sortOrder,
                   );
                   final groupedTrips = <Trip>[
@@ -884,6 +919,7 @@ class _HomeScreenState extends State<HomeScreen> {
                       AdventureOrganizer(
                         searchController: _searchController,
                         filter: _ownershipFilter,
+                        category: _categoryFilter,
                         sortOrder: _sortOrder,
                         visibleCount: visibleTrips.length,
                         totalCount: trips.length,
@@ -894,6 +930,9 @@ class _HomeScreenState extends State<HomeScreen> {
                         },
                         onFilterChanged: (filter) {
                           setState(() => _ownershipFilter = filter);
+                        },
+                        onCategoryChanged: (category) {
+                          setState(() => _categoryFilter = category);
                         },
                         onSortChanged: (sortOrder) {
                           setState(() => _sortOrder = sortOrder);
@@ -1828,7 +1867,12 @@ class _ActivityCard extends StatelessWidget {
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              CircleAvatar(child: Icon(icon)),
+              CircleAvatar(
+                backgroundColor: tripCategoryColor(activity.trip.category)
+                    .withValues(alpha: .14),
+                foregroundColor: tripCategoryColor(activity.trip.category),
+                child: Icon(icon),
+              ),
               const SizedBox(width: 14),
               Expanded(
                 child: Column(
@@ -1860,14 +1904,35 @@ class _ActivityCard extends StatelessWidget {
                       ),
                     ],
                     const SizedBox(height: 10),
-                    Text(
-                      contextLabel,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: Theme.of(context).textTheme.labelMedium?.copyWith(
-                        color: Theme.of(context).colorScheme.primary,
-                        fontWeight: FontWeight.w700,
-                      ),
+                    Row(
+                      children: [
+                        Icon(
+                          tripCategoryIcon(activity.trip.category),
+                          size: 16,
+                          color: tripCategoryColor(activity.trip.category),
+                        ),
+                        const SizedBox(width: 5),
+                        Text(
+                          activity.trip.category.label,
+                          style: Theme.of(context).textTheme.labelMedium
+                              ?.copyWith(
+                                color: tripCategoryColor(
+                                  activity.trip.category,
+                                ),
+                                fontWeight: FontWeight.w800,
+                              ),
+                        ),
+                        const SizedBox(width: 6),
+                        Expanded(
+                          child: Text(
+                            '· $contextLabel',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: Theme.of(context).textTheme.labelMedium
+                                ?.copyWith(fontWeight: FontWeight.w700),
+                          ),
+                        ),
+                      ],
                     ),
                     const SizedBox(height: 4),
                     Tooltip(
@@ -3417,24 +3482,28 @@ class AdventureOrganizer extends StatelessWidget {
     super.key,
     required this.searchController,
     required this.filter,
+    required this.category,
     required this.sortOrder,
     required this.visibleCount,
     required this.totalCount,
     required this.onSearchChanged,
     required this.onSearchClear,
     required this.onFilterChanged,
+    required this.onCategoryChanged,
     required this.onSortChanged,
     required this.onClear,
   });
 
   final TextEditingController searchController;
   final TripOwnershipFilter filter;
+  final TripCategory? category;
   final TripSortOrder sortOrder;
   final int visibleCount;
   final int totalCount;
   final ValueChanged<String> onSearchChanged;
   final VoidCallback onSearchClear;
   final ValueChanged<TripOwnershipFilter> onFilterChanged;
+  final ValueChanged<TripCategory?> onCategoryChanged;
   final ValueChanged<TripSortOrder> onSortChanged;
   final VoidCallback onClear;
 
@@ -3443,6 +3512,7 @@ class AdventureOrganizer extends StatelessWidget {
     final hasActiveControls =
         searchController.text.trim().isNotEmpty ||
         filter != TripOwnershipFilter.all ||
+        category != null ||
         sortOrder != TripSortOrder.recentlyUpdated;
 
     return Padding(
@@ -3467,6 +3537,31 @@ class AdventureOrganizer extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 10),
+          SizedBox(
+            height: 42,
+            child: ListView(
+              scrollDirection: Axis.horizontal,
+              children: [
+                _CategoryFilterChip(
+                  label: 'All categories',
+                  icon: Icons.apps_outlined,
+                  selected: category == null,
+                  onSelected: () => onCategoryChanged(null),
+                ),
+                for (final option in TripCategory.values) ...[
+                  const SizedBox(width: 8),
+                  _CategoryFilterChip(
+                    label: option.label,
+                    icon: tripCategoryIcon(option),
+                    color: tripCategoryColor(option),
+                    selected: category == option,
+                    onSelected: () => onCategoryChanged(option),
+                  ),
+                ],
+              ],
+            ),
+          ),
+          const SizedBox(height: 8),
           Row(
             crossAxisAlignment: CrossAxisAlignment.center,
             children: [
@@ -3573,6 +3668,38 @@ class _FilterChip extends StatelessWidget {
     return ChoiceChip(
       label: Text(label),
       selected: selected,
+      onSelected: (_) => onSelected(),
+    );
+  }
+}
+
+class _CategoryFilterChip extends StatelessWidget {
+  const _CategoryFilterChip({
+    required this.label,
+    required this.icon,
+    required this.selected,
+    required this.onSelected,
+    this.color,
+  });
+
+  final String label;
+  final IconData icon;
+  final bool selected;
+  final VoidCallback onSelected;
+  final Color? color;
+
+  @override
+  Widget build(BuildContext context) {
+    final accent = color ?? Theme.of(context).colorScheme.primary;
+    return ChoiceChip(
+      avatar: Icon(icon, size: 18, color: selected ? Colors.white : accent),
+      label: Text(label),
+      selected: selected,
+      selectedColor: accent,
+      labelStyle: TextStyle(color: selected ? Colors.white : null),
+      side: BorderSide(
+        color: selected ? accent : accent.withValues(alpha: .35),
+      ),
       onSelected: (_) => onSelected(),
     );
   }
@@ -3731,7 +3858,7 @@ class _TripDraft {
   final String? coverContentType;
 }
 
-enum _TripAction { edit, delete }
+enum _TripAction { edit, category, delete }
 
 class _TripDialog extends StatefulWidget {
   const _TripDialog({
@@ -4264,6 +4391,102 @@ class _TripFact extends StatelessWidget {
           child: Text(label, style: Theme.of(context).textTheme.bodySmall),
         ),
       ],
+    );
+  }
+}
+
+class _CategoryBadge extends StatelessWidget {
+  const _CategoryBadge({required this.category, this.onPressed});
+
+  final TripCategory category;
+  final VoidCallback? onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = tripCategoryColor(category);
+    final content = Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: .12),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: color.withValues(alpha: .35)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(tripCategoryIcon(category), size: 16, color: color),
+          const SizedBox(width: 5),
+          Text(
+            category.label,
+            style: Theme.of(context).textTheme.labelMedium
+                ?.copyWith(color: color, fontWeight: FontWeight.w800),
+          ),
+          if (onPressed != null) ...[
+            const SizedBox(width: 4),
+            Icon(Icons.edit_outlined, size: 13, color: color),
+          ],
+        ],
+      ),
+    );
+    if (onPressed == null) return content;
+    return Tooltip(
+      message: 'Change category',
+      child: InkWell(
+        onTap: onPressed,
+        borderRadius: BorderRadius.circular(999),
+        child: content,
+      ),
+    );
+  }
+}
+
+class _CategoryPickerSheet extends StatelessWidget {
+  const _CategoryPickerSheet({required this.selected});
+
+  final TripCategory selected;
+
+  @override
+  Widget build(BuildContext context) {
+    return SafeArea(
+      child: ConstrainedBox(
+        constraints: BoxConstraints(
+          maxHeight: MediaQuery.sizeOf(context).height * .75,
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(24, 4, 24, 12),
+              child: Text(
+                'Change category',
+                style: Theme.of(context).textTheme.titleLarge,
+              ),
+            ),
+            Flexible(
+              child: ListView(
+                shrinkWrap: true,
+                children: [
+                  for (final category in TripCategory.values)
+                    ListTile(
+                      leading: CircleAvatar(
+                        backgroundColor: tripCategoryColor(category)
+                            .withValues(alpha: .14),
+                        foregroundColor: tripCategoryColor(category),
+                        child: Icon(tripCategoryIcon(category)),
+                      ),
+                      title: Text(category.label),
+                      trailing: category == selected
+                          ? const Icon(Icons.check)
+                          : null,
+                      onTap: () => Navigator.of(context).pop(category),
+                    ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

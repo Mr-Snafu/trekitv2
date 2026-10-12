@@ -52,6 +52,17 @@ void main() {
     );
   });
 
+  test('filters adventures by category', () {
+    expect(
+      organizeTrips(trips, category: TripCategory.outdoorAdventure).single.id,
+      'owned',
+    );
+    expect(
+      organizeTrips(trips, category: TripCategory.vacation).single.id,
+      'shared',
+    );
+  });
+
   test('sorts by recent activity, trip date, and name', () {
     expect(organizeTrips(trips).first.id, 'owned');
     expect(

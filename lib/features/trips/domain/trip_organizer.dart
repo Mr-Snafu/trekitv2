@@ -8,6 +8,7 @@ List<Trip> organizeTrips(
   Iterable<Trip> trips, {
   String query = '',
   TripOwnershipFilter filter = TripOwnershipFilter.all,
+  TripCategory? category,
   TripSortOrder sortOrder = TripSortOrder.recentlyUpdated,
 }) {
   final normalizedQuery = query.trim().toLowerCase();
@@ -18,8 +19,9 @@ List<Trip> organizeTrips(
           TripOwnershipFilter.owned => trip.accessRole == 'owner',
           TripOwnershipFilter.shared => trip.accessRole != 'owner',
         };
-        if (!matchesFilter || normalizedQuery.isEmpty) {
-          return matchesFilter;
+        final matchesCategory = category == null || trip.category == category;
+        if (!matchesFilter || !matchesCategory || normalizedQuery.isEmpty) {
+          return matchesFilter && matchesCategory;
         }
         return trip.name.toLowerCase().contains(normalizedQuery) ||
             trip.description.toLowerCase().contains(normalizedQuery) ||

@@ -655,6 +655,16 @@ class TripRepository {
     }
   }
 
+  Future<void> updateTripCategory({
+    required String tripId,
+    required TripCategory category,
+  }) {
+    return _trips.doc(tripId).update({
+      'category': category.value,
+      'updatedAt': Timestamp.now(),
+    });
+  }
+
   Future<void> deleteTrip(String tripId) async {
     await _callFunction('deleteTrip', {'tripId': tripId});
   }

@@ -14,6 +14,7 @@ import '../domain/adventure_comment.dart';
 import '../domain/journal_entry.dart';
 import '../domain/trip.dart';
 import '../domain/trip_member.dart';
+import 'trip_category_style.dart';
 
 class TripDetailScreen extends StatefulWidget {
   const TripDetailScreen({
@@ -300,11 +301,7 @@ class _TripDetailScreenState extends State<TripDetailScreen> {
           children: [
             if (_uploadProgress case final progress?)
               LinearProgressIndicator(value: progress),
-            if (widget.trip.description.isNotEmpty ||
-                widget.trip.location.isNotEmpty ||
-                widget.trip.startDate != null ||
-                widget.trip.endDate != null)
-              _TripOverview(trip: widget.trip),
+            _TripOverview(trip: widget.trip),
             Expanded(
               child: StreamBuilder<List<JournalEntry>>(
                 stream: widget.repository.watchEntries(widget.trip.id),
@@ -826,6 +823,13 @@ class _TripOverview extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
+              _OverviewRow(
+                icon: tripCategoryIcon(trip.category),
+                text: trip.category.label,
+                color: tripCategoryColor(trip.category),
+              ),
+              if (trip.location.isNotEmpty || dateLabel != null)
+                const SizedBox(height: 8),
               if (trip.location.isNotEmpty)
                 _OverviewRow(icon: Icons.place_outlined, text: trip.location),
               if (trip.location.isNotEmpty && dateLabel != null)
@@ -835,9 +839,7 @@ class _TripOverview extends StatelessWidget {
                   icon: Icons.calendar_today_outlined,
                   text: dateLabel,
                 ),
-              if ((trip.location.isNotEmpty || dateLabel != null) &&
-                  trip.description.isNotEmpty)
-                const SizedBox(height: 12),
+              if (trip.description.isNotEmpty) const SizedBox(height: 12),
               if (trip.description.isNotEmpty) Text(trip.description),
             ],
           ),
@@ -848,19 +850,26 @@ class _TripOverview extends StatelessWidget {
 }
 
 class _OverviewRow extends StatelessWidget {
-  const _OverviewRow({required this.icon, required this.text});
+  const _OverviewRow({required this.icon, required this.text, this.color});
 
   final IconData icon;
   final String text;
+  final Color? color;
 
   @override
   Widget build(BuildContext context) {
     return Row(
       children: [
-        Icon(icon, size: 18),
+        Icon(icon, size: 18, color: color),
         const SizedBox(width: 8),
         Expanded(
-          child: Text(text, style: Theme.of(context).textTheme.labelLarge),
+          child: Text(
+            text,
+            style: Theme.of(context).textTheme.labelLarge?.copyWith(
+              color: color,
+              fontWeight: color == null ? null : FontWeight.w800,
+            ),
+          ),
         ),
       ],
     );

@@ -34,6 +34,7 @@ This document is the source of truth for TrekIt V2 development. TrekIt is a priv
 
 - Draft, Live, and Completed lifecycle states are live.
 - Adventure cover images and grouped image-card layouts are live.
+- Adventure categories, category search, and category-based organization are live.
 - Preserve private membership roles and owner controls.
 - Keep journal memories ordered by their memory date and prohibit future entry dates.
 
@@ -76,5 +77,6 @@ This document is the source of truth for TrekIt V2 development. TrekIt is a priv
 13. Replace the Circle invite placeholder with real links, QR codes, and safe sign-in handoff. *(Live)*
 14. Polish the mobile web app for installation while keeping push and offline app caching on separate service-worker scopes. *(Live)*
 15. Add global photo quick capture with Live-adventure selection, upload progress, and retry without retaking the photo. *(Live)*
+16. Add category-driven adventure filtering, recognizable category visuals, detail and Feed context, and quick recategorization. *(Live)*
 
 Every phase should be checked against this blueprint, tested at mobile width, deployed through a preview, verified against the live build, and backed up to GitHub.

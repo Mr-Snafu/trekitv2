@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:trekit/features/home/presentation/home_screen.dart';
+import 'package:trekit/features/trips/domain/trip.dart';
 import 'package:trekit/features/trips/domain/trip_organizer.dart';
 
 void main() {
@@ -10,6 +11,7 @@ void main() {
     final searchController = TextEditingController();
     addTearDown(searchController.dispose);
     var selectedFilter = TripOwnershipFilter.all;
+    TripCategory? selectedCategory;
 
     await tester.pumpWidget(
       MaterialApp(
@@ -17,12 +19,14 @@ void main() {
           body: AdventureOrganizer(
             searchController: searchController,
             filter: selectedFilter,
+            category: selectedCategory,
             sortOrder: TripSortOrder.recentlyUpdated,
             visibleCount: 3,
             totalCount: 3,
             onSearchChanged: (_) {},
             onSearchClear: () => searchController.clear(),
             onFilterChanged: (value) => selectedFilter = value,
+            onCategoryChanged: (value) => selectedCategory = value,
             onSortChanged: (_) {},
             onClear: () {},
           ),
@@ -33,10 +37,16 @@ void main() {
     expect(find.text('All'), findsOneWidget);
     expect(find.text('Mine'), findsOneWidget);
     expect(find.text('Shared'), findsOneWidget);
+    expect(find.text('All categories'), findsOneWidget);
     expect(find.text('3 adventures'), findsOneWidget);
     expect(tester.takeException(), isNull);
 
     await tester.tap(find.text('Mine'));
     expect(selectedFilter, TripOwnershipFilter.owned);
+
+    await tester.ensureVisible(find.text('Road Trip'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Road Trip'));
+    expect(selectedCategory, TripCategory.roadTrip);
   });
 }
